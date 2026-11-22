@@ -169,7 +169,7 @@ On first sync each synced line gets a block id such as `^t3k9x2ab`. That id link
 
 ## How sync works
 
-Sync runs on the server, since the server holds the files. The app triggers it a few seconds after you save (once you pause typing, so a task isn't sent half-written), when the window regains focus, every *N* minutes while open (5 by default), and from the sync button. Notes changed outside Tickmark (another editor, a file sync tool) are synced a few seconds after the change. There's also an optional server-side timer.
+Sync runs on the server, since the server holds the files. The editor saves when you pause typing for 8 seconds (or leave the note), and sync runs right after that save, so a task is never sent half-written. The app also syncs when the window regains focus, every *N* minutes while open (5 by default), and from the sync button. Notes changed outside Tickmark (another editor, a file sync tool) are synced a few seconds after the change. There's also an optional server-side timer.
 
 - **Three-way, per field.** The last synced state of each task is stored. If a field changed on only one side, that change wins. If the same field changed on both sides, the note wins. Different fields merge, e.g. you rename the task in the note while your phone marks it done.
 - **Already done before it ever synced** (e.g. the completed copies recurring tasks leave behind): stays in the note, isn't uploaded.
@@ -182,7 +182,7 @@ Sync runs on the server, since the server holds the files. The app triggers it a
 
 ## Editor
 
-Source / split / preview (Ctrl+E cycles). Preview checkboxes are clickable and edit the source line; checking an item stamps `✅ date` and moves it, with its sub-items, under a **Complete** heading at the end of its section (unchecking moves it back; Settings → Sync turns this off). That happens for items checked in a task app too. Tasks live in your notes: there is no separate task list view. `[[wikilinks]]` (clicking a missing one creates the note; renaming or moving a note or folder updates links to it), backlinks, #tag search, full-text search, and drag-and-drop in the file tree.
+Source / split / preview (Ctrl+E cycles). Preview checkboxes are clickable and edit the source line; checking an item stamps `✅ date` and moves it, with its sub-items, under a **Complete** heading at the end of its section (unchecking moves it back; Settings → CalDAV accounts turns this off). That happens for items checked in a task app too. Tasks live in your notes: there is no separate task list view. `[[wikilinks]]` (clicking a missing one creates the note; renaming or moving a note or folder updates links to it), backlinks, #tag search, full-text search, and drag-and-drop in the file tree.
 
 **Public links.** A note's **⋯** menu, or a folder's menu in the sidebar, → **Share…** makes a read-only link anyone can open without signing in (a folder link shows every note in it, including ones added later, and `[[links]]` between them work). Links follow renames, stop when the note goes to the trash, and are listed under Settings → **Public links**, where you can stop sharing. They're only offered when `TICKMARK_PUBLIC_URL` is a domain name (not an IP address or localhost), and links are built from it. Raw HTML in shared notes shows as text.
 

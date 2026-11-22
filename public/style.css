@@ -401,3 +401,4 @@ details.card[open] summary { margin-bottom: 4px; }
 .warn-note { color: var(--warn); }
 .shares-list-url { font-size: 12px; color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-dlg a { color: var(--accent); }
+.set-body .sub-head { margin: 18px 0 0; font-size: 14px; padding-top: 14px; border-top: 1px solid var(--line); }

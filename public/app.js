@@ -265,7 +265,7 @@ function toggleTask(text, lineNo) {
 
 function applyEdit(text) {
   setEditorText(text);
-  onEdited();
+  onEdited({ now: true }); // a click (checkbox, shortcut), not typing: save straight away
 }
 
 function replaceRange(start, end, text) {
@@ -276,14 +276,16 @@ function replaceRange(start, end, text) {
   if (!ok) { ed.setRangeText(text, start, end, 'end'); onEdited(); }
 }
 
-function onEdited() {
-  S.lastInputAt = Date.now();
+function onEdited({ now = false } = {}) {
+  if (!now) S.lastInputAt = Date.now();
   updateSaveState();
-  scheduleSave();
+  if (now) saveSoon(); else scheduleSave();
   schedulePreview();
   scheduleWordCount();
 }
-el.editor.addEventListener('input', onEdited);
+el.editor.addEventListener('input', () => onEdited());
+// Leaving the editor saves at once rather than waiting for the pause.
+el.editor.addEventListener('blur', () => { if (el.editor.value !== S.base) flushSave(); });
 
 function lineBounds(v, pos) {
   const s = v.lastIndexOf('\n', pos - 1) + 1;
@@ -397,7 +399,12 @@ function savedLabel(t) {
 }
 setInterval(() => { if (!S.saving) updateSaveState(); }, 30000);
 
-const scheduleSave = debounce(() => save(), 700);
+// Typing saves once you pause (TYPING_PAUSE), the same pause sync waits for, and sync follows the
+// save. One write per pause means the file on disk and the editor don't trade half-typed versions
+// with sync. Leaving the note, the editor or the page saves straight away.
+const TYPING_PAUSE = 8000;
+const scheduleSave = debounce(() => save(), TYPING_PAUSE);
+const saveSoon = debounce(() => save(), 300);
 
 async function save() {
   if (S.mode !== 'note' || !S.path) return;
@@ -420,7 +427,7 @@ async function save() {
       }
       S.savedAt = Date.now();
       updateSaveState();
-      scheduleSync(4000);
+      scheduleSync(250);
     } catch (e) {
       if (e.status && e.status !== 401) { updateSaveState('error'); toast(`Couldn't save: ${e.message}`); }
       else { // offline, or signed out: keep the edit on this device until it can be saved
@@ -882,17 +889,18 @@ function renderSync() {
   const label = b.querySelector('.label');
   if (!syncConfigured()) { label.textContent = 'Set up CalDAV sync'; b.title = 'Connect a CalDAV task list'; return; }
   if (st.state === 'syncing') { b.classList.add('syncing'); label.textContent = 'Syncing…'; return; }
-  if (st.state === 'error') { b.classList.add('error'); label.textContent = 'Sync problem'; b.title = st.lastError || ''; return; }
+  if (st.state === 'error') { b.classList.add('error'); label.textContent = 'Sync problem'; b.title = (st.lastError ? st.lastError + '\n\n' : '') + nextSyncText(); return; }
   b.classList.add('ok');
   label.textContent = st.lastRun ? `Synced ${relTime(st.lastRun)}` : 'Ready to sync';
   const r = st.lastResult;
   const line = (x) => `${x.created} created, ${x.pushed} sent, ${x.pulled} received, ${x.imported} imported, ${x.deletedRemote + x.deletedLocal} deleted`;
   b.title = r ? (r.accounts?.length > 1 ? 'Last sync:\n' + r.accounts.map((a) => `${a.name}: ${a.error || line(a)}`).join('\n') : `Last sync: ${line(r)}`) +
     (r.errors?.length ? `\n${r.errors.length} error(s):\n${r.errors.join('\n')}` : '') : 'Sync now';
+  b.title += '\n\n' + nextSyncText();
 }
+el.sync.addEventListener('mouseenter', renderSync); // so the countdown is current when the tooltip shows
 setInterval(renderSync, 30000);
 
-const TYPING_PAUSE = 8000;
 async function runSync({ manual = false, force = false } = {}) {
   if (!syncConfigured()) { if (manual) openSettings(); return; }
   if (S.sync.state === 'syncing' && !manual) return;
@@ -936,7 +944,18 @@ let syncInterval = null;
 function setupSyncTimer() {
   clearInterval(syncInterval);
   const mins = S.config?.clientSyncMinutes ?? 5;
-  if (mins > 0) syncInterval = setInterval(() => { if (document.visibilityState === 'visible') runSync(); }, mins * 60000);
+  S.nextTimerAt = mins > 0 ? Date.now() + mins * 60000 : null;
+  if (mins > 0) syncInterval = setInterval(() => {
+    S.nextTimerAt = Date.now() + mins * 60000;
+    if (document.visibilityState === 'visible') runSync();
+  }, mins * 60000);
+}
+/** "Next sync in about 3 min", for the sync button's tooltip. */
+function nextSyncText() {
+  if (!S.nextTimerAt) return 'Automatic sync while open is off (Settings → CalDAV accounts); it still syncs after you save.';
+  const s = Math.max(0, (S.nextTimerAt - Date.now()) / 1000);
+  const when = s < 60 ? 'in under a minute' : `in about ${Math.round(s / 60)} min`;
+  return `Next sync ${when}, and after you save.`;
 }
 
 // ---------------------------------------------------------------- settings
@@ -994,7 +1013,7 @@ async function discover(box) {
 
 // The settings pane: a menu of sections. CalDAV accounts and Sync share one form and Save button;
 // the others act immediately (account, users) or have their own Save (single sign-on).
-const SECTIONS = { caldav: 'CalDAV accounts', sync: 'Sync', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', branding: 'Branding', shares: 'Public links' };
+const SECTIONS = { caldav: 'CalDAV accounts', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', branding: 'Branding', shares: 'Public links' };
 const setDlg = $('#dlg-settings');
 const isMulti = () => S.me?.mode === 'multi' && !!S.me.user;
 const isAdmin = () => isMulti() && !!S.me.user.admin;
@@ -1015,7 +1034,7 @@ function showSection(sec) {
     b.classList.toggle('active', b.dataset.sec === sec);
     b.setAttribute('aria-current', b.dataset.sec === sec ? 'page' : 'false');
   });
-  form.hidden = !['caldav', 'sync'].includes(sec);
+  form.hidden = sec !== 'caldav';
   form.querySelectorAll(':scope > section').forEach((x) => (x.hidden = x.dataset.sec !== sec));
   setDlg.querySelectorAll('.set-main > [data-sec]').forEach((x) => (x.hidden = x.dataset.sec !== sec));
   if (sec === 'users') loadUsers();
