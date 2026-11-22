@@ -230,6 +230,41 @@ function renderPreview() {
     }
   });
   el.preview.querySelectorAll('a.wikilink').forEach((a) => { if (!resolveLink(a.dataset.target)) a.classList.add('missing'); });
+  applyFolds(true);
+}
+
+// ---- collapsible headings in the preview (remembered per note, on this device)
+const foldKey = (h) => `${h.tagName}:${h.textContent.trim()}`;
+/** Hide what's under each collapsed heading, up to the next heading of the same or a higher level. */
+function applyFolds(addButtons = false) {
+  const folded = new Set(store.get('fold:' + S.path, []));
+  let hideBelow = 0; // while > 0, hide everything until a heading of this level or higher
+  for (const node of el.preview.children) {
+    const lvl = /^H([1-6])$/.exec(node.tagName)?.[1];
+    if (lvl && addButtons && !node.querySelector(':scope > .fold')) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'fold';
+      b.setAttribute('aria-label', 'Collapse or expand this section');
+      b.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
+      node.prepend(b);
+    }
+    if (lvl && hideBelow && +lvl <= hideBelow) hideBelow = 0;
+    node.classList.toggle('folded-away', !!hideBelow);
+    if (lvl && !hideBelow) {
+      const closed = folded.has(foldKey(node));
+      node.classList.toggle('folded', closed);
+      node.querySelector(':scope > .fold')?.setAttribute('aria-expanded', String(!closed));
+      if (closed) hideBelow = +lvl;
+    }
+  }
+}
+function toggleFold(h) {
+  const k = foldKey(h);
+  const folded = new Set(store.get('fold:' + S.path, []));
+  if (folded.has(k)) folded.delete(k); else folded.add(k);
+  if (folded.size) store.set('fold:' + S.path, [...folded]); else store.del('fold:' + S.path);
+  applyFolds();
 }
 const schedulePreview = (() => { let raf = 0; return () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderPreview); }; })();
 
@@ -404,6 +439,8 @@ el.preview.addEventListener('contextmenu', (e) => {
   ]);
 });
 el.preview.addEventListener('click', (e) => {
+  const fold = e.target.closest('.fold');
+  if (fold) { e.preventDefault(); toggleFold(fold.parentElement); return; }
   const cb = e.target.closest('input.task-cb');
   if (cb) {
     e.preventDefault();

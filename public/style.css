@@ -411,3 +411,15 @@ details.card[open] summary { margin-bottom: 4px; }
 .task-cb[data-state="cancelled"]:checked::after { content: "✕"; width: auto; height: auto; border: 0; transform: none; color: var(--surface); font-size: 11px; line-height: 1; font-weight: 700; }
 .md li.cancelled-item { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
 .brand-pane { display: grid; gap: 12px; }
+
+/* Collapsible headings (preview) */
+.md :is(h1, h2, h3, h4, h5, h6) { position: relative; }
+.md .fold { position: absolute; left: -1.5em; top: 50%; transform: translateY(-50%); width: 1.3em; height: 1.3em; padding: 0; border: 0; background: none;
+  color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s; display: grid; place-items: center; }
+.md .fold svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.5; transform: rotate(90deg); transition: transform .15s; }
+.md :is(h1, h2, h3, h4, h5, h6):hover > .fold, .md .fold:focus-visible, .md .folded > .fold { opacity: 1; }
+.md .folded > .fold svg { transform: none; }
+.md .folded::after { content: " …"; color: var(--muted); font-weight: 400; }
+.md .folded-away { display: none !important; }
+@media (hover: none) { .md .fold { opacity: .6; } }
+@media (max-width: 760px) { .md .fold { left: -1.2em; } }
