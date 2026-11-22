@@ -281,3 +281,77 @@ export function newBlockId() {
   for (let i = 0; i < 7; i++) s += a[Math.floor(Math.random() * a.length)];
   return s;
 }
+
+export const COMPLETE_HEADING = 'Complete';
+
+/**
+ * Keep finished checklist items out of the way: a checked item (with its indented sub-items) moves to
+ * the end of a "Complete" subheading at the end of its section, which is added if needed; an item
+ * unchecked there moves back up, just above that heading, and an emptied "Complete" heading goes away.
+ * Only top-level items move (not sub-items of another item). Returns the new text, or null if nothing moved.
+ */
+export function fileCompleted(text, lineNo) {
+  const lines = text.split('\n');
+  const m = lines[lineNo]?.match(/^((?:[-*+]|\d+[.)])\s+)\[([ xX])\]/);
+  if (!m) return null;
+  const done = m[2] !== ' ';
+  // Headings outside code blocks: [{ i, level, name }]
+  const heads = [];
+  let fence = null;
+  for (let i = 0; i < lines.length; i++) {
+    const f = lines[i].match(FENCE);
+    if (fence) {
+      if (i === lineNo) return null; // a checkbox in a code block isn't an item
+      if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+      continue;
+    }
+    if (f) { fence = f[1]; continue; }
+    const h = lines[i].match(HEADING);
+    if (h) heads.push({ i, level: h[1].length, name: sectionName(h[2]) });
+  }
+  const isComplete = (h) => h.name.toLowerCase() === COMPLETE_HEADING.toLowerCase();
+  const end = (h) => (heads.find((x) => x.i > h.i && x.level <= h.level) || { i: lines.length }).i;
+  // The item and its sub-items (more indented lines; blank lines only if more sub-items follow).
+  let last = lineNo;
+  for (let i = lineNo + 1; i < lines.length; i++) {
+    if (/^\s+\S/.test(lines[i])) last = i;
+    else if (lines[i].trim()) break;
+  }
+  const block = lines.slice(lineNo, last + 1);
+  const own = [...heads].reverse().find((h) => h.i < lineNo) || null;
+  // Back to the end of a section's own content, before trailing blank lines.
+  const trimBack = (at, floor) => { while (at > floor + 1 && !lines[at - 1].trim()) at--; return at; };
+
+  if (done) {
+    if (own && isComplete(own)) return null;
+    const lvl = own ? own.level : 1;
+    const secEnd = own ? end(own) : lines.length;
+    const target = heads.find((h) => h.i > (own ? own.i : -1) && h.i < secEnd && h.level === Math.min(lvl + 1, 6) && isComplete(h));
+    let out;
+    if (target) {
+      const at = trimBack(end(target), target.i);
+      out = [...lines.slice(0, at), ...block, ...lines.slice(at)];
+    } else {
+      const at = trimBack(secEnd, own ? own.i : -1);
+      const heading = `${'#'.repeat(Math.min(lvl + 1, 6))} ${COMPLETE_HEADING}`;
+      const gap = at > 0 && lines[at - 1].trim() ? [''] : [];
+      const after = at < lines.length && lines[at].trim() ? [''] : [];
+      out = [...lines.slice(0, at), ...gap, heading, ...block, ...after, ...lines.slice(at)];
+    }
+    // Take the block out of its old place (it was before the insertion point).
+    out.splice(lineNo, block.length);
+    return out.join('\n');
+  }
+
+  if (!own || !isComplete(own)) return null;
+  // Unchecked under "Complete": back up, just above that heading (dropped if nothing's left under it).
+  const out = [...lines];
+  out.splice(lineNo, block.length);
+  const sEnd = end(own) - block.length;
+  const left = out.slice(own.i + 1, sEnd).some((l) => l.trim());
+  let at = own.i;
+  while (at > 0 && !out[at - 1].trim()) at--;
+  if (!left) out.splice(at, own.i + 1 - at);
+  out.splice(at, 0, ...block);
+  return out.join('\n');
+}

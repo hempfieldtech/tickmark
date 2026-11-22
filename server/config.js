@@ -14,6 +14,8 @@ const DEFAULTS = {
   // Client-triggered sync runs on save/focus; this is an optional server-side timer (0 = off).
   serverSyncMinutes: 0,
   clientSyncMinutes: 5,
+  // Checked items move under a "Complete" heading at the end of their section.
+  moveCompleted: true,
 };
 
 const tagList = (v) => [...new Set((typeof v === 'string' ? v.split(/[,\s]+/) : v || [])
@@ -126,6 +128,7 @@ export class Config {
     for (const k of ['serverSyncMinutes', 'clientSyncMinutes']) {
       if (patch[k] !== undefined) next[k] = Math.max(0, Number(patch[k]) || 0);
     }
+    if (patch.moveCompleted !== undefined) next.moveCompleted = patch.moveCompleted === true || patch.moveCompleted === 'true';
     this.data = next;
     this.write();
     return this.data;

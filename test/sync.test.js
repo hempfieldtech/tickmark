@@ -76,6 +76,8 @@ test('bi-directional sync', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, asy
     const r = await engine.run();
     assert.equal(r.pulled, 1);
     assert.match(read('Projects/Plan.md'), /- \[x\] Oat milk ✅ \d{4}-\d\d-\d\d \^t/);
+    assert.match(read('Projects/Plan.md'), /## Groceries #sync\n[^#]*\n### Complete\n- \[x\] Oat milk/, 'filed under Complete, still in its #sync section');
+    assert.equal((await engine.run()).pushed, 0, 'moving it is not a change to send');
   });
 
   await t.test('pushes local edits', async () => {

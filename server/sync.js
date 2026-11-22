@@ -11,7 +11,7 @@
 // Several CalDAV accounts can be configured. Each synced item belongs to exactly one, chosen by
 // accountFor(); sync state is kept per account, so retagging an item moves it between accounts.
 
-import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection } from '../public/shared/tasks.js';
+import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted } from '../public/shared/tasks.js';
 import { buildTodo, parseICS, findTodo, todoModel, occurrenceCompleted } from './ical.js';
 import { CalDAV } from './caldav.js';
 import { fingerprint } from './secrets.js';
@@ -406,6 +406,15 @@ export class SyncEngine {
         }
         if (!applied.length) return null;
         let out = lines.join('\n');
+        // Checked or unchecked in a task app: file it under (or back out of) the "Complete" heading,
+        // like checking it in the editor does.
+        if (this.getConfig().moveCompleted !== false) {
+          for (const op of applied) {
+            if (op.type !== 'update' || op.history || !!op.expect.done === !!op.model.done) continue;
+            const at = out.split('\n').findIndex((l) => l.trimEnd().endsWith(' ^' + op.bid));
+            if (at >= 0) out = fileCompleted(out, at) ?? out;
+          }
+        }
         if (!out.endsWith('\n')) out += '\n';
         return out;
       });

@@ -259,3 +259,25 @@ test('renaming a note rewrites [[links]] to it', async () => {
   assert.equal(dupe, '[[Archive/Plan]]', 'a name that is now ambiguous becomes a path');
   assert.equal(move('Work', 'Office')('[[Work/Plan#Q1]] [[Plan]]'), '[[Office/Plan#Q1]] [[Plan]]', 'folder moves update paths');
 });
+
+test('checked items move under a "Complete" heading, and back when unchecked', async () => {
+  const { fileCompleted, toggleLine } = await import('../public/shared/tasks.js');
+  const check = (text, n) => fileCompleted(toggleLine(text, n, { stampDone: false }), n);
+  let t = '# Work\n- [ ] A\n- [ ] B\n';
+  t = check(t, 1);
+  assert.equal(t, '# Work\n- [ ] B\n\n## Complete\n- [x] A\n');
+  t = check(t, 1);
+  assert.equal(t, '# Work\n\n## Complete\n- [x] A\n- [x] B\n', 'appends to the existing heading');
+  t = check(t, 3);
+  assert.equal(t, '# Work\n- [ ] A\n\n## Complete\n- [x] B\n', 'unchecked: back above the heading');
+  t = check(t, 4);
+  assert.equal(t, '# Work\n- [ ] A\n- [ ] B\n', 'empty heading removed');
+
+  const home = '# Home\n\n## Groceries #sync\n- [ ] Milk\n  - [ ] 2%\n- [ ] Eggs\n\n### Dairy\n- [ ] Butter\n\n## Chores\n- [ ] Vacuum\n';
+  assert.equal(check(home, 3), '# Home\n\n## Groceries #sync\n- [ ] Eggs\n\n### Dairy\n- [ ] Butter\n\n### Complete\n- [x] Milk\n  - [ ] 2%\n\n## Chores\n- [ ] Vacuum\n',
+    'end of its section, after subsections, with its sub-items');
+  assert.equal(check(home, 4), null, 'sub-items stay with their parent');
+  assert.equal(check('- [ ] Loose\n- [ ] Other', 0), '- [ ] Other\n\n## Complete\n- [x] Loose', 'no heading at all');
+  assert.equal(fileCompleted('# X\n\n## Complete\n- [x] Done\n', 3), null, 'already there');
+  assert.equal(check('```\n- [ ] code\n```\n', 1), null, 'never inside code blocks');
+});

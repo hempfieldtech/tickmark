@@ -1,5 +1,5 @@
 import { marked } from './vendor/marked.esm.js';
-import { checkboxLines, toggleLine, parseTasks, normTag, localDate } from './shared/tasks.js';
+import { checkboxLines, toggleLine, fileCompleted, parseTasks, normTag, localDate } from './shared/tasks.js';
 import { parseRecurrence, describeRecurrence } from './shared/recur.js';
 import { textStats } from './shared/words.js';
 
@@ -252,6 +252,15 @@ function setEditorText(text) {
   scheduleWordCount();
 }
 
+/** Check or uncheck an item; with "move completed" on, it also moves under/out of the "Complete" heading. */
+function toggleTask(text, lineNo) {
+  const next = toggleLine(text, lineNo);
+  if (next === text || S.config?.moveCompleted === false) return next;
+  // A recurring item leaves a completed copy on the line below; that's the one to file away.
+  const done = next.split('\n').length > text.split('\n').length ? lineNo + 1 : lineNo;
+  return fileCompleted(next, done) ?? next;
+}
+
 function applyEdit(text) {
   setEditorText(text);
   onEdited();
@@ -318,7 +327,7 @@ el.editor.addEventListener('keydown', (e) => {
     const lineNo = v.slice(0, s).split('\n').length - 1;
     const [ls, le] = lineBounds(v, s);
     const line = v.slice(ls, le);
-    if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\]/.test(line)) applyEdit(toggleLine(v, lineNo));
+    if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\]/.test(line)) applyEdit(toggleTask(v, lineNo));
     else {
       const m = line.match(/^(\s*(?:>\s*)*)([-*+]|\d+[.)])\s+/);
       if (m) replaceRange(ls + m[0].length, ls + m[0].length, '[ ] ');
@@ -340,7 +349,7 @@ el.preview.addEventListener('click', (e) => {
   if (cb) {
     e.preventDefault();
     const line = Number(cb.dataset.line);
-    if (!Number.isNaN(line)) applyEdit(toggleLine(el.editor.value, line));
+    if (!Number.isNaN(line)) applyEdit(toggleTask(el.editor.value, line));
     return;
   }
   const wl = e.target.closest('a.wikilink');
@@ -1014,6 +1023,7 @@ function openSettings(sec) {
   if (!accountsEl.children.length) addAccountBox({ name: 'CalDAV' });
   $('#enc-note').hidden = !c.encrypted;
   form.clientSyncMinutes.value = c.clientSyncMinutes ?? 5;
+  form.moveCompleted.checked = c.moveCompleted !== false;
   form.serverSyncMinutes.value = c.serverSyncMinutes ?? 0;
   renderMe();
   showSection(typeof sec === 'string' ? sec : store.get('settingsSection', 'caldav'));
@@ -1060,7 +1070,7 @@ form.addEventListener('submit', async (e) => {
     };
   // An untouched blank account box is not an account.
   }).filter((a) => a.id || a.url || a.calendarUrl);
-  const body = { accounts, clientSyncMinutes: form.clientSyncMinutes.value, serverSyncMinutes: form.serverSyncMinutes.value };
+  const body = { accounts, clientSyncMinutes: form.clientSyncMinutes.value, serverSyncMinutes: form.serverSyncMinutes.value, moveCompleted: form.moveCompleted.checked };
   try {
     S.config = await api('PUT', '/api/config', body);
     store.set('config', S.config);
