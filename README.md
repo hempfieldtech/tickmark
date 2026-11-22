@@ -200,8 +200,8 @@ The app works offline. Notes you've opened are cached, and edits are queued on t
 ## Tests
 
 ```sh
-node --test test/                                           # unit, server, sign-in and SSO (mock provider) tests
-CALDAV_TEST_URL=http://127.0.0.1:5232/ CALDAV_TEST_USER=test node --test test/    # + end-to-end sync against a CalDAV server (e.g. Radicale, auth=none)
+node --test 'test/*.test.js'                                         # unit, server, sign-in and SSO (mock provider) tests
+CALDAV_TEST_URL=http://127.0.0.1:5232/ CALDAV_TEST_USER=test node --test 'test/*.test.js'  # + end-to-end sync against a CalDAV server (e.g. Radicale, auth=none)
 ```
 
 ## Known limits

@@ -1,5 +1,5 @@
 // End-to-end sync test against a real CalDAV server.
-//   CALDAV_TEST_URL=http://127.0.0.1:5232/ CALDAV_TEST_USER=test node --test test/
+//   CALDAV_TEST_URL=http://127.0.0.1:5232/ CALDAV_TEST_USER=test node --test 'test/*.test.js'
 // Skipped when CALDAV_TEST_URL is unset. Creates (and leaves) a fresh calendar per run.
 
 import { test } from 'node:test';
