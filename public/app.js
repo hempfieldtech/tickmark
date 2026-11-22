@@ -266,6 +266,7 @@ function replaceRange(start, end, text) {
 }
 
 function onEdited() {
+  S.lastInputAt = Date.now();
   updateSaveState();
   scheduleSave();
   schedulePreview();
@@ -280,16 +281,20 @@ function lineBounds(v, pos) {
   return [s, e];
 }
 
+const BID_AFTER = /^\s*\^[A-Za-z0-9-]+\s*$/; // only a block id between the caret and the end of the line
 const LIST_RE = /^(\s*(?:>\s*)*)([-*+]|(\d+)([.)]))(\s+)(\[[ xX]\]\s+)?/;
 el.editor.addEventListener('keydown', (e) => {
   const ed = el.editor, mod = e.ctrlKey || e.metaKey;
   if (e.key === 'Enter' && !mod && !e.shiftKey && !e.altKey && !e.isComposing) {
-    const { selectionStart: s, selectionEnd: se, value: v } = ed;
+    let { selectionStart: s, selectionEnd: se, value: v } = ed;
     if (s !== se) return;
     const [ls, le] = lineBounds(v, s);
+    // Sync may have added a block id after the caret while you typed; Enter shouldn't split it off.
+    const keepId = s < le && BID_AFTER.test(v.slice(s, le));
+    if (keepId) s = le;
     const before = v.slice(ls, s);
     const m = before.match(LIST_RE);
-    if (!m) return;
+    if (!m) { if (keepId) { e.preventDefault(); replaceRange(le, le, '\n'); } return; }
     e.preventDefault();
     if (before.length === m[0].length && !v.slice(s, le).trim()) {
       replaceRange(ls, s, ''); // Enter on an empty item ends the list
@@ -869,9 +874,14 @@ function renderSync() {
 }
 setInterval(renderSync, 30000);
 
+const TYPING_PAUSE = 8000;
 async function runSync({ manual = false, force = false } = {}) {
   if (!syncConfigured()) { if (manual) openSettings(); return; }
   if (S.sync.state === 'syncing' && !manual) return;
+  // Background syncs wait until you pause typing, so a task isn't sent (and given its block id)
+  // while you're still writing it.
+  const typing = Date.now() - (S.lastInputAt || 0);
+  if (!manual && typing < TYPING_PAUSE) { scheduleSync(TYPING_PAUSE - typing + 250); return; }
   S.lastSyncAt = Date.now();
   await flushSave();
   let r;
