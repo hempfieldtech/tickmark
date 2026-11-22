@@ -24,6 +24,7 @@ import { UserStore, Sessions, LoginLimiter, AuthError, normName } from './users.
 import { OIDC, OIDCError } from './oidc.js';
 import { settingsCipher } from './secrets.js';
 import { ServerSettings, SSO_FIELDS } from './server-settings.js';
+import { Branding } from './branding.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = path.resolve(process.env.TICKMARK_DATA || path.join(ROOT, 'data'));
@@ -53,6 +54,7 @@ try { ensureWritable(DATA); ensureWritable(VAULT); } catch (e) { console.error(e
 
 const users = new UserStore(DATA);
 const serverSettings = new ServerSettings(DATA);
+const branding = new Branding(DATA);
 const limiter = new LoginLimiter();
 const workspaces = new Map();
 let single = null;
@@ -159,7 +161,20 @@ const MIME = {
 function serveStatic(req, res, pathname) {
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { return json(res, 400, { error: 'Bad path' }); }
+  if (rel.startsWith('/branding/')) {
+    if (!branding.serve(rel.slice(10), res)) json(res, 404, { error: 'Not found' });
+    return;
+  }
   if (rel === '/' || !path.extname(rel)) rel = '/index.html';
+  // The app shell and manifest carry the server's branding.
+  if (rel === '/index.html' || rel === '/manifest.webmanifest') {
+    return fs.readFile(path.join(PUBLIC, rel), 'utf8', (err, src) => {
+      if (err) return json(res, 404, { error: 'Not found' });
+      const out = rel === '/index.html' ? branding.html(src) : branding.manifest(src);
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(rel)], 'Cache-Control': 'no-cache' });
+      res.end(out);
+    });
+  }
   const abs = path.resolve(PUBLIC, '.' + rel);
   if (!abs.startsWith(PUBLIC + path.sep)) return json(res, 403, { error: 'Forbidden' });
   fs.stat(abs, (err, st) => {
@@ -299,6 +314,8 @@ const routes = {
     return { ok: true };
   },
 
+  // ---- branding (server-wide: admins, or anyone in single-user mode)
+  'PUT /api/branding': ({ user }, q, body) => { if (MULTI) admin(user); return branding.update(body); },
   // ---- admin: single sign-on
   'GET /api/admin/sso': ({ user, req }) => { admin(user); return ssoState(req); },
   'PUT /api/admin/sso': ({ user, req }, q, body) => {
@@ -371,6 +388,8 @@ function ssoState(req) {
 
 // Routes that work without a session.
 const authRoutes = {
+  // Branding shows on the sign-in screen too.
+  'GET /api/branding': () => branding.public(),
   'GET /api/auth/me': ({ req }) => {
     if (!MULTI) return { mode: 'single', canSetup: true };
     const u = sessionUser(req);

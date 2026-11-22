@@ -496,3 +496,51 @@ test('renaming a note updates [[links]] to it in other notes', async () => {
     assert.deepEqual((await c.call('GET', '/api/backlinks?path=Projects%2FSomeday.md')).data, ['Daily.md']);
   } finally { await srv.stop(); }
 });
+
+test('branding: name, logo and favicon for everyone, set by admins', async () => {
+  const dir = tmp();
+  const env = { TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault') };
+  let srv = await startServer(env);
+  let c = client(srv.base);
+  const png = 'data:image/png;base64,' + Buffer.from('\x89PNG\r\n\x1a\nfake').toString('base64');
+  const svg = 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>').toString('base64');
+  try {
+    assert.deepEqual((await c.call('GET', '/api/branding')).data,
+      { name: 'Tickmark', customName: false, logo: '/icons/icon.svg', favicon: '/icons/icon.svg', hasLogo: false, hasFavicon: false });
+    const b = (await c.call('PUT', '/api/branding', { name: 'Acme <Notes>', logo: svg, favicon: png })).data;
+    assert.equal(b.name, 'Acme <Notes>');
+    assert.match(b.logo, /^\/branding\/logo\?v=/);
+    assert.match(b.favicon, /^\/branding\/favicon\?v=/);
+    const html = (await c.call('GET', '/')).data;
+    assert.match(html, /<title>Acme &lt;Notes&gt;<\/title>/);
+    assert.match(html, /<span class="brand-name">Acme &lt;Notes&gt;<\/span>/);
+    assert.ok(html.includes(`<link rel="icon" href="${b.favicon}" type="image/png">`));
+    const logo = await fetch(srv.base + b.logo);
+    assert.equal(logo.headers.get('content-type'), 'image/svg+xml');
+    assert.match(logo.headers.get('content-security-policy'), /default-src 'none'/, 'SVG scripts never run');
+    const m = (await c.call('GET', '/manifest.webmanifest')).data;
+    assert.equal(m.name, 'Acme <Notes>');
+    assert.equal(m.icons[0].src, b.logo);
+    assert.equal((await c.call('PUT', '/api/branding', { logo: 'data:text/html;base64,PGI+' })).status, 400);
+    // Back to the defaults; the old files go away.
+    await c.call('PUT', '/api/branding', { name: '', logo: null, favicon: null });
+    assert.match((await c.call('GET', '/')).data, /<title>Tickmark<\/title>/);
+    assert.deepEqual(fs.readdirSync(path.join(dir, 'data', 'branding')), []);
+    await c.call('PUT', '/api/branding', { name: 'Acme' });
+  } finally { await srv.stop(); }
+
+  // With sign-in on, only admins can change it, but anyone (even signed out) sees it.
+  addUser(env.TICKMARK_DATA, 'boss', 'correct horse');
+  srv = await startServer(env);
+  try {
+    c = client(srv.base);
+    assert.equal((await c.call('GET', '/api/branding')).data.name, 'Acme');
+    assert.equal((await c.call('PUT', '/api/branding', { name: 'Mine' })).status, 401);
+    await c.call('POST', '/api/auth/login', { username: 'boss', password: 'correct horse' });
+    await c.call('POST', '/api/users', { name: 'pat', password: 'battery staple' });
+    const p = client(srv.base);
+    await p.call('POST', '/api/auth/login', { username: 'pat', password: 'battery staple' });
+    assert.equal((await p.call('PUT', '/api/branding', { name: 'Mine' })).status, 403);
+    assert.equal((await c.call('PUT', '/api/branding', { name: 'Ours' })).data.name, 'Ours');
+  } finally { await srv.stop(); }
+});

@@ -357,3 +357,9 @@ details.card[open] summary { margin-bottom: 4px; }
 .css-card { margin-top: 16px; }
 .css-card textarea { width: 100%; font-family: var(--mono); font-size: 13px; padding: 8px 10px; border: 1px solid var(--line);
   border-radius: 6px; background: var(--bg); resize: vertical; tab-size: 2; }
+
+/* Branding (Settings → Branding) */
+.brand-imgs { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.brand-preview { width: 40px; height: 40px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; padding: 4px; background: var(--bg); }
+.brand img { object-fit: contain; }
+.btn:disabled { opacity: .5; cursor: default; }

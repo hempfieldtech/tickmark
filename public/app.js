@@ -504,7 +504,7 @@ async function open(path, { line = null, push = true } = {}) {
   el.title.value = basename(path);
   el.title.disabled = false;
   el.crumbs.textContent = dirname(path) ? dirname(path).replaceAll('/', ' / ') + ' /' : '';
-  document.title = `${basename(path)} · Tickmark`;
+  document.title = `${basename(path)} · ${S.brand?.name || 'Tickmark'}`;
   applyView();
   renderPreview();
   renderWordCount();
@@ -985,7 +985,7 @@ async function discover(box) {
 
 // The settings pane: a menu of sections. CalDAV accounts and Sync share one form and Save button;
 // the others act immediately (account, users) or have their own Save (single sign-on).
-const SECTIONS = { caldav: 'CalDAV accounts', sync: 'Sync', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance' };
+const SECTIONS = { caldav: 'CalDAV accounts', sync: 'Sync', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', branding: 'Branding' };
 const setDlg = $('#dlg-settings');
 const isMulti = () => S.me?.mode === 'multi' && !!S.me.user;
 const isAdmin = () => isMulti() && !!S.me.user.admin;
@@ -1012,6 +1012,7 @@ function showSection(sec) {
   if (sec === 'users') loadUsers();
   if (sec === 'sso') loadSso();
   if (sec === 'appearance') { renderThemes(); renderCssEditor(); }
+  if (sec === 'branding') renderBranding();
 }
 setDlg.querySelectorAll('.set-nav [data-sec]').forEach((b) => (b.onclick = () => showSection(b.dataset.sec)));
 setDlg.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { e.preventDefault(); showSection(g.dataset.goto); } });
@@ -1056,6 +1057,64 @@ $('#themes').addEventListener('click', (e) => {
   renderThemes();
   $(`#themes .theme-opt[data-id="${b.dataset.id}"]`)?.focus();
 });
+
+// ---- branding: server-wide name, logo and favicon
+/** Show the server's branding everywhere it appears (the server also fills it into the page it sends). */
+function applyBranding(b) {
+  if (!b) return;
+  S.brand = b;
+  document.querySelectorAll('.brand-name').forEach((x) => (x.textContent = b.name));
+  document.querySelectorAll('.brand img').forEach((x) => (x.src = b.logo));
+  const fav = document.querySelector('link[rel="icon"]');
+  if (fav && fav.getAttribute('href') !== b.favicon) { fav.removeAttribute('type'); fav.href = b.favicon; }
+  document.title = S.mode === 'note' && S.path ? `${basename(S.path)} · ${b.name}` : b.name;
+}
+const brandDraft = {}; // kind → data: URL, or null to go back to the default
+const canBrand = () => !isMulti() || isAdmin();
+function renderBranding() {
+  const b = S.brand || { name: 'Tickmark', logo: '/icons/icon.svg', favicon: '/icons/icon.svg' };
+  for (const k of Object.keys(brandDraft)) delete brandDraft[k];
+  $('#brand-name').value = b.customName ? b.name : '';
+  const editable = canBrand();
+  $('#brand-admin-note').hidden = editable;
+  for (const x of document.querySelectorAll('[data-sec="branding"] input, [data-sec="branding"] button')) x.disabled = !editable;
+  renderBrandImages();
+  $('#brand-state').textContent = '';
+}
+function renderBrandImages() {
+  const b = S.brand || {};
+  for (const card of document.querySelectorAll('.brand-img')) {
+    const k = card.dataset.kind;
+    const draft = brandDraft[k];
+    const logo = brandDraft.logo !== undefined ? brandDraft.logo || '/icons/icon.svg' : b.logo || '/icons/icon.svg';
+    card.querySelector('.brand-preview').src = draft !== undefined ? draft || (k === 'favicon' ? logo : '/icons/icon.svg')
+      : k === 'favicon' ? (b.hasFavicon ? b.favicon : logo) : b.logo || '/icons/icon.svg';
+    const custom = draft !== undefined ? !!draft : k === 'logo' ? !!b.hasLogo : !!b.hasFavicon;
+    card.querySelector('[data-act="clear"]').disabled = !custom || !canBrand();
+  }
+}
+for (const card of document.querySelectorAll('.brand-img')) {
+  const input = card.querySelector('input[type=file]');
+  card.querySelector('[data-act="pick"]').onclick = () => input.click();
+  card.querySelector('[data-act="clear"]').onclick = () => { brandDraft[card.dataset.kind] = null; renderBrandImages(); };
+  input.onchange = () => {
+    const f = input.files[0];
+    input.value = '';
+    if (!f) return;
+    if (f.size > 1024 * 1024) return toast('Images must be 1 MB or smaller');
+    const r = new FileReader();
+    r.onload = () => { brandDraft[card.dataset.kind] = r.result; renderBrandImages(); };
+    r.readAsDataURL(f);
+  };
+}
+$('#btn-brand-save').onclick = async () => {
+  try {
+    const b = await api('PUT', '/api/branding', { name: $('#brand-name').value, ...brandDraft });
+    applyBranding(b);
+    renderBranding();
+    $('#brand-state').textContent = 'Saved';
+  } catch (e) { toast(e.message); }
+};
 
 // ---- custom CSS: live while typing, saved per user (follows them to every device)
 const cssBox = $('#custom-css');
@@ -1459,6 +1518,7 @@ document.addEventListener('keydown', (e) => {
 
 // ---------------------------------------------------------------- boot
 async function boot() {
+  api('GET', '/api/branding').then(applyBranding).catch(() => {});
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   try { S.me = await api('GET', '/api/auth/me'); store.set('me', S.me); } catch { S.me = store.get('me'); /* offline */ }
   if (S.me?.mode === 'multi') {

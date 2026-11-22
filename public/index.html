@@ -16,7 +16,7 @@
   <div id="app" class="view-split">
     <aside id="sidebar">
       <div class="side-head">
-        <span class="brand"><img src="/icons/icon.svg" alt="" width="20" height="20"> Tickmark</span>
+        <span class="brand"><img src="/icons/icon.svg" alt="" width="20" height="20"> <span class="brand-name">Tickmark</span></span>
         <button class="icon-btn" id="btn-new" title="New note (Ctrl+N)" aria-label="New note">
           <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
         <button class="icon-btn" id="btn-new-folder" title="New folder" aria-label="New folder">
@@ -80,6 +80,7 @@
         <button type="button" data-sec="users">Users</button>
         <button type="button" data-sec="sso">Single sign-on</button>
         <button type="button" data-sec="appearance">Appearance</button>
+        <button type="button" data-sec="branding">Branding</button>
         <button type="button" id="nav-deleted" title="Synced tasks deleted from any note">Deleted tasks…</button>
       </nav>
       <div class="set-main">
@@ -125,6 +126,27 @@
               <span class="note" id="css-state"></span>
             </div>
           </div>
+        </section>
+
+        <section data-sec="branding" class="set-body">
+          <p class="note">The name and pictures this Tickmark shows everyone: in the sidebar, on the sign-in screen, in browser tabs, and as the installed app.
+            <span id="brand-admin-note" hidden>Only admins can change them.</span></p>
+          <label>Name <input id="brand-name" maxlength="40" placeholder="Tickmark" autocomplete="off"></label>
+          <div class="brand-imgs">
+            <div class="card brand-img" data-kind="logo">
+              <h4>Logo</h4>
+              <p class="note">Sidebar, sign-in screen and app icon. A square image, 512×512 or an SVG, works best.</p>
+              <div class="row"><img alt="" class="brand-preview"><input type="file" accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif" hidden>
+                <button type="button" class="btn" data-act="pick">Choose…</button><button type="button" class="btn" data-act="clear">Use default</button></div>
+            </div>
+            <div class="card brand-img" data-kind="favicon">
+              <h4>Favicon</h4>
+              <p class="note">The browser tab icon. Leave it on the default to use the logo.</p>
+              <div class="row"><img alt="" class="brand-preview"><input type="file" accept="image/png,image/svg+xml,image/x-icon,image/vnd.microsoft.icon,image/gif,image/webp" hidden>
+                <button type="button" class="btn" data-act="pick">Choose…</button><button type="button" class="btn" data-act="clear">Use default</button></div>
+            </div>
+          </div>
+          <div class="row"><button type="button" id="btn-brand-save" class="btn primary">Save</button><span class="note" id="brand-state"></span></div>
         </section>
 
         <section data-sec="account" class="set-body">
@@ -288,7 +310,7 @@
 
   <div id="login" hidden>
     <form id="login-form" class="login-card">
-      <span class="brand"><img src="/icons/icon.svg" alt="" width="24" height="24"> Tickmark</span>
+      <span class="brand"><img src="/icons/icon.svg" alt="" width="24" height="24"> <span class="brand-name">Tickmark</span></span>
       <div id="login-local">
         <label>User name <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
         <label>Password <input name="password" type="password" autocomplete="current-password"></label>
