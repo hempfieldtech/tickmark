@@ -1,0 +1,18 @@
+# systemctl --user: cp contrib/tickmark.service ~/.config/systemd/user/ && systemctl --user enable --now tickmark
+[Unit]
+Description=Tickmark markdown notes + CalDAV task sync
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/Projects/tickmark
+ExecStart=/usr/bin/node server/index.js
+Environment=TICKMARK_VAULT=%h/Documents/Tickmark
+Environment=TICKMARK_DATA=%h/.local/share/tickmark
+Environment=PORT=8087
+# Environment=HOST=0.0.0.0
+# Environment=TICKMARK_USER=me
+# Environment=TICKMARK_PASS=change-me
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

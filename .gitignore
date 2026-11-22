@@ -1,0 +1,5 @@
+data/
+vault/
+node_modules/
+*.tmp
+.env

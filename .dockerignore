@@ -1,0 +1,8 @@
+.git
+data
+vault
+node_modules
+test
+contrib
+*.md
+!public/**/*.md

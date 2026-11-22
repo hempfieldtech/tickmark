@@ -1,0 +1,22 @@
+services:
+  tickmark:
+    build: .
+    image: tickmark:latest
+    container_name: tickmark
+    restart: unless-stopped
+    # Match the container user to the owner of ./vault and ./data on the host (often 1000:1000).
+    user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      # Localhost only by default. To reach it from your network, put TICKMARK_BIND=0.0.0.0 in a .env
+      # file next to this one, and turn on sign-in (or put it behind HTTPS: tailscale serve, a reverse proxy).
+      - "${TICKMARK_BIND:-127.0.0.1}:8087:8087"
+    environment:
+      TZ: ${TZ:-Etc/UTC}   # used for due dates/times sent to and read from CalDAV
+    # Sign-in and SSO settings (TICKMARK_OIDC_*, TICKMARK_PUBLIC_URL, …) go in .env next to this
+    # file, which keeps secrets out of git. See "Users and sign-in" in the README.
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./vault:/vault   # your .md notes; point this at an existing folder if you like
+      - ./data:/data     # settings (CalDAV passwords), users, sessions, search index
