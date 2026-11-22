@@ -426,3 +426,9 @@ details.card[open] summary { margin-bottom: 4px; }
 .readme { font-size: 14px; }
 .readme table { font-size: 13px; }
 .readme .tag { cursor: default; }
+
+/* [[wikilink]] suggestions */
+.suggest { max-width: min(420px, calc(100vw - 16px)); }
+.suggest button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: 5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+.suggest button[aria-selected="true"], .suggest button:hover { background: var(--accent-soft); color: var(--accent); }
+.suggest .dir { color: var(--muted); font-size: 12px; margin-left: 6px; }

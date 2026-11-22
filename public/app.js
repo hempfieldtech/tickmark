@@ -365,6 +365,87 @@ el.editor.addEventListener('input', () => onEdited());
 // Leaving the editor saves at once rather than waiting for the pause.
 el.editor.addEventListener('blur', () => { if (el.editor.value !== S.base) flushSave(); });
 
+// ---- [[wikilink]] suggestions: typing [[ lists matching notes; ↑/↓ to pick, Enter or Tab to insert.
+const suggest = { box: null, items: [], i: 0, start: 0 };
+/** Where the caret is on screen (a hidden copy of the textarea up to the caret). */
+function caretXY(ta, pos) {
+  const m = document.createElement('div');
+  const cs = getComputedStyle(ta);
+  for (const p of ['font', 'lineHeight', 'letterSpacing', 'tabSize', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderLeftWidth', 'boxSizing', 'width', 'whiteSpace', 'wordWrap', 'overflowWrap'])
+    m.style[p] = cs[p];
+  Object.assign(m.style, { position: 'absolute', visibility: 'hidden', whiteSpace: 'pre-wrap', wordWrap: 'break-word', top: '0', left: '-9999px' });
+  m.textContent = ta.value.slice(0, pos);
+  const mark = document.createElement('span');
+  mark.textContent = '\u200b';
+  m.append(mark);
+  document.body.append(m);
+  const r = ta.getBoundingClientRect();
+  const out = { x: r.left + mark.offsetLeft - ta.scrollLeft, y: r.top + mark.offsetTop - ta.scrollTop, h: parseFloat(cs.lineHeight) || 20 };
+  m.remove();
+  return out;
+}
+function closeSuggest() { suggest.box?.remove(); suggest.box = null; suggest.items = []; }
+function updateSuggest() {
+  const ed = el.editor;
+  if (ed.selectionStart !== ed.selectionEnd) return closeSuggest();
+  const pos = ed.selectionStart;
+  const before = ed.value.slice(ed.value.lastIndexOf('\n', pos - 1) + 1, pos);
+  const m = /\[\[([^\]|#^\n]*)$/.exec(before);
+  if (!m) return closeSuggest();
+  const q = m[1].trim().toLowerCase();
+  const scored = S.files.filter((f) => f.path !== S.path).map((f) => {
+    const name = basename(f.path).toLowerCase(), full = f.path.toLowerCase();
+    const score = !q ? 3 : name.startsWith(q) ? 0 : name.includes(q) ? 1 : full.includes(q) ? 2 : -1;
+    return { f, score };
+  }).filter((x) => x.score >= 0).sort((a, b) => a.score - b.score || basename(a.f.path).localeCompare(basename(b.f.path))).slice(0, 8);
+  if (!scored.length) return closeSuggest();
+  suggest.items = scored.map((x) => x.f.path);
+  suggest.start = pos - m[1].length;
+  suggest.i = Math.min(suggest.i, suggest.items.length - 1);
+  if (!suggest.box) {
+    suggest.box = document.createElement('div');
+    suggest.box.className = 'menu suggest';
+    suggest.box.setAttribute('role', 'listbox');
+    suggest.box.addEventListener('mousedown', (e) => { // mousedown, so the editor keeps focus
+      const b = e.target.closest('button');
+      if (b) { e.preventDefault(); pickSuggest(+b.dataset.i); }
+    });
+    document.body.append(suggest.box);
+  }
+  suggest.box.innerHTML = suggest.items.map((p, i) => `<button type="button" role="option" data-i="${i}" aria-selected="${i === suggest.i}">` +
+    `${esc(basename(p))}${dirname(p) ? ` <span class="dir">${esc(dirname(p))}</span>` : ''}</button>`).join('');
+  const c = caretXY(ed, suggest.start);
+  const top = c.y + c.h + 4, below = top + suggest.box.offsetHeight < innerHeight;
+  Object.assign(suggest.box.style, { left: `${Math.min(c.x, innerWidth - suggest.box.offsetWidth - 8)}px`, top: `${below ? top : c.y - suggest.box.offsetHeight - 4}px` });
+}
+function pickSuggest(i) {
+  const path = suggest.items[i];
+  if (!path) return;
+  const ed = el.editor, name = basename(path);
+  // A name that more than one note has gets its folder too.
+  const target = S.files.filter((f) => basename(f.path).toLowerCase() === name.toLowerCase()).length > 1 ? path.replace(/\.md$/i, '') : name;
+  const end = ed.selectionStart;
+  const closing = ed.value.slice(end, end + 2) === ']]' ? '' : ']]';
+  replaceRange(suggest.start, end, target + closing);
+  if (!closing) ed.setSelectionRange(suggest.start + target.length + 2, suggest.start + target.length + 2);
+  closeSuggest();
+}
+el.editor.addEventListener('keydown', (e) => {
+  if (!suggest.box) return;
+  const n = suggest.items.length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { suggest.i = (suggest.i + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; }
+  else if (e.key === 'Enter' || e.key === 'Tab') { pickSuggest(suggest.i); }
+  else if (e.key === 'Escape') { closeSuggest(); }
+  else return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if (suggest.box) updateSuggest();
+}, true);
+el.editor.addEventListener('input', () => { suggest.i = 0; updateSuggest(); });
+el.editor.addEventListener('click', updateSuggest);
+el.editor.addEventListener('blur', closeSuggest);
+el.editor.addEventListener('scroll', closeSuggest);
+
 function lineBounds(v, pos) {
   const s = v.lastIndexOf('\n', pos - 1) + 1;
   let e = v.indexOf('\n', pos);
