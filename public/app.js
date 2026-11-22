@@ -1,6 +1,7 @@
 import { marked } from './vendor/marked.esm.js';
 import { checkboxLines, toggleLine, parseTasks, normTag, localDate } from './shared/tasks.js';
 import { parseRecurrence, describeRecurrence } from './shared/recur.js';
+import { textStats } from './shared/words.js';
 
 // ---------------------------------------------------------------- utilities
 const $ = (s, root = document) => root.querySelector(s);
@@ -36,7 +37,7 @@ async function api(method, url, body) {
 
 const el = {
   app: $('#app'), tree: $('#tree'), results: $('#search-results'), search: $('#search'),
-  editor: $('#editor'), preview: $('#preview'), previewWrap: $('#preview-wrap'), backlinks: $('#backlinks'),
+  editor: $('#editor'), preview: $('#preview'), previewWrap: $('#preview-wrap'), backlinks: $('#backlinks'), wordCount: $('#word-count'),
   empty: $('#empty'), title: $('#title'), crumbs: $('#crumbs'), saveState: $('#save-state'),
   sync: $('#btn-sync'), menu: $('#menu'), toast: $('#toast'),
 };
@@ -212,6 +213,14 @@ function renderPreview() {
 }
 const schedulePreview = (() => { let raf = 0; return () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderPreview); }; })();
 
+function renderWordCount() {
+  if (S.mode !== 'note') return;
+  const { words, chars } = textStats(el.editor.value);
+  const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? '' : 's'}`;
+  el.wordCount.textContent = `${plural(words, 'word')} · ${plural(chars, 'character')}`;
+}
+const scheduleWordCount = (() => { let t = 0; return () => { clearTimeout(t); t = setTimeout(renderWordCount, 150); }; })();
+
 function resolveLink(target) {
   const t = target.replace(/[#^].*$/, '').trim().toLowerCase().replace(/\.md$/, '');
   if (!t) return null;
@@ -240,6 +249,7 @@ function setEditorText(text) {
   let b = 0;
   while (b < old.length - a && b < text.length - a && old[old.length - 1 - b] === text[text.length - 1 - b]) b++;
   ed.setRangeText(text.slice(a, text.length - b), a, old.length - b, 'preserve');
+  scheduleWordCount();
 }
 
 function applyEdit(text) {
@@ -259,6 +269,7 @@ function onEdited() {
   updateSaveState();
   scheduleSave();
   schedulePreview();
+  scheduleWordCount();
 }
 el.editor.addEventListener('input', onEdited);
 
@@ -469,6 +480,7 @@ async function open(path, { line = null, push = true } = {}) {
   document.title = `${basename(path)} · Tickmark`;
   applyView();
   renderPreview();
+  renderWordCount();
   renderTree();
   updateSaveState();
   if (mobile.matches) el.app.classList.remove('sidebar-open');
@@ -524,6 +536,7 @@ function applyView() {
   const note = S.mode === 'note';
   el.editor.hidden = !note;
   el.previewWrap.hidden = !note;
+  el.wordCount.hidden = !note;
   el.empty.hidden = S.mode !== 'empty';
   document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.view === effectiveView()));
   if (note && effectiveView() !== 'edit') schedulePreview();

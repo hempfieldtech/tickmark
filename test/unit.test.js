@@ -210,3 +210,32 @@ test('older index databases gain the section columns', async () => {
   ix.putState('a1', { block_id: 't2', uid: 'u2', href: 'y.ics', base: {}, path: 'A.md', section: 'Groceries' });
   assert.equal(ix.getStates('a1').find((x) => x.block_id === 't2').section, 'Groceries');
 });
+
+test('word count ignores markdown syntax and task metadata', async () => {
+  const { countWords } = await import('../public/shared/words.js');
+  const c = (s) => countWords(s);
+  assert.equal(c(''), 0);
+  assert.equal(c('# Heading here'), 2);
+  assert.equal(c('**bold** and _italic_ and ~~gone~~ and ==hi== and `code`'), 9);
+  assert.equal(c('1. first\n2) second\n- third\n* [ ] fourth\n- [x] fifth'), 5);
+  assert.equal(c('> quoted text\n> > nested'), 3);
+  assert.equal(c('[link text](https://example.com/a/b) ![alt words](img/pic.png)'), 4);
+  assert.equal(c('See [[Some Note]] and [[Other#Heading|alias]]'), 5);
+  assert.equal(c('---\ntitle: Hello world\ntags: [a, b]\n---\nBody only'), 2);
+  assert.equal(c('```js\nconst x = 1;\n```\nafter'), 4);
+  assert.equal(c('| a | b |\n|---|:---:|\n| c | d |'), 4);
+  assert.equal(c('***\n---\n\nText\n===='), 1);
+  assert.equal(c('- [ ] Call dentist #task ⏫ 📅 2026-11-25 14:30 🔁 every week ✅ 2026-11-20 ^tabc123'), 3);
+  assert.equal(c('snake_case word and a - dash'), 5);
+  assert.equal(c('<span class="x">inside</span> <!-- hidden note -->'), 1);
+  assert.equal(c('[ref]: https://example.com\nUse [it][ref]'), 2);
+});
+
+test('character count uses the same syntax stripping', async () => {
+  const { textStats } = await import('../public/shared/words.js');
+  assert.deepEqual(textStats(''), { words: 0, chars: 0 });
+  assert.deepEqual(textStats('# Hi there'), { words: 2, chars: 8 });
+  assert.deepEqual(textStats('**bold** [link](https://example.com)'), { words: 2, chars: 9 });
+  assert.deepEqual(textStats('- [ ] Buy milk #task 📅 2026-11-25\n- [x] Café'), { words: 4, chars: 17 });
+  assert.deepEqual(textStats('one - two'), { words: 2, chars: 7 });
+});

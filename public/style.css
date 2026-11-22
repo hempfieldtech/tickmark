@@ -98,7 +98,8 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 
-#workspace { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+#workspace { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; position: relative; }
+#word-count { position: absolute; left: 10px; bottom: 8px; padding: 2px 8px; border-radius: 6px; background: var(--bg); color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; pointer-events: none; opacity: .85; }
 .view-edit #workspace, .view-read #workspace { grid-template-columns: 1fr; }
 .view-edit #preview-wrap, .view-read #editor { display: none !important; }
 .empty { grid-column: 1 / -1; display: grid; place-content: center; text-align: center; color: var(--muted); padding: 24px; }
