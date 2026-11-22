@@ -544,3 +544,61 @@ test('branding: name, logo and favicon for everyone, set by admins', async () =>
     assert.equal((await c.call('PUT', '/api/branding', { name: 'Ours' })).data.name, 'Ours');
   } finally { await srv.stop(); }
 });
+
+test('public links share a note or folder, read-only, only with a domain-based public URL', async () => {
+  const dir = tmp();
+  const base = { TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault') };
+  // An IP address isn't good enough.
+  let srv = await startServer({ ...base, TICKMARK_PUBLIC_URL: 'http://192.168.1.5:8087' });
+  let c = client(srv.base);
+  try {
+    await c.call('POST', '/api/file', { path: 'Plan.md', content: '# Plan\n- [ ] Ship #task ^tabc1234\nSee [[Ideas]].\n' });
+    await c.call('POST', '/api/file', { path: 'Trip/Packing.md', content: 'Socks, see [[Route]]\n' });
+    await c.call('POST', '/api/file', { path: 'Trip/Notes/Route.md', content: 'North <script>alert(1)</script>\n' });
+    await c.call('POST', '/api/file', { path: 'Private.md', content: 'secret\n' });
+    assert.match((await c.call('GET', '/api/shares')).data.blocker, /local address/);
+    assert.equal((await c.call('POST', '/api/shares', { path: 'Plan.md' })).status, 400);
+  } finally { await srv.stop(); }
+
+  srv = await startServer({ ...base, TICKMARK_PUBLIC_URL: 'https://notes.example.com/' , TICKMARK_USER: 'me', TICKMARK_PASS: 'pw' });
+  c = client(srv.base);
+  const auth = { Authorization: 'Basic ' + Buffer.from('me:pw').toString('base64') };
+  const call = (m, u, body) => fetch(srv.base + u, { method: m, headers: { ...auth, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body && JSON.stringify(body) }).then(async (r) => ({ status: r.status, data: await r.json() }));
+  const anon = (u) => fetch(srv.base + u).then(async (r) => ({ status: r.status, headers: r.headers, data: r.headers.get('content-type')?.includes('json') ? await r.json() : await r.text() }));
+  try {
+    const note = (await call('POST', '/api/shares', { path: 'Plan.md' })).data;
+    assert.equal(note.kind, 'note');
+    assert.match(note.url, /^https:\/\/notes\.example\.com\/s\/[\w-]{22}$/);
+    assert.equal((await call('POST', '/api/shares', { path: 'Plan.md' })).data.token, note.token, 'sharing again gives the same link');
+    const folder = (await call('POST', '/api/shares', { path: 'Trip' })).data;
+    assert.equal(folder.kind, 'folder');
+
+    // Anyone can read them, even with Basic auth on everything else.
+    assert.equal((await anon('/api/tree')).status, 401);
+    const page = await anon(`/s/${note.token}`);
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get('content-security-policy'), /default-src 'self'/);
+    assert.match(page.data, /share\.js/);
+    const n = (await anon(`/api/public/${note.token}`)).data;
+    assert.deepEqual([n.kind, n.name, n.content], ['note', 'Plan', '# Plan\n- [ ] Ship #task ^tabc1234\nSee [[Ideas]].\n']);
+    const f = (await anon(`/api/public/${folder.token}`)).data;
+    assert.deepEqual([f.kind, f.name, f.files], ['folder', 'Trip', ['Notes/Route.md', 'Packing.md']]);
+    assert.equal((await anon(`/api/public/${folder.token}?path=Notes%2FRoute.md`)).data.content, 'North <script>alert(1)</script>\n');
+    for (const bad of ['../Private.md', 'Notes/../../Private.md', '%2e%2e/Private.md', 'Private.md']) {
+      assert.equal((await anon(`/api/public/${folder.token}?path=${encodeURIComponent(bad)}`)).status, 404, bad);
+    }
+    assert.equal((await anon('/api/public/nope')).status, 404);
+
+    // Links follow renames and stop when the note goes to the trash or sharing stops.
+    await call('POST', '/api/rename', { from: 'Trip', to: 'Travel' });
+    assert.equal((await anon(`/api/public/${folder.token}`)).data.name, 'Travel');
+    const list = (await call('GET', '/api/shares')).data.shares;
+    assert.deepEqual(list.map((x) => x.path), ['Plan.md', 'Travel']);
+    assert.equal(list[0].owner, undefined, 'owner is not exposed');
+    await call('DELETE', '/api/file?path=Plan.md');
+    assert.equal((await anon(`/api/public/${note.token}`)).status, 404);
+    await call('DELETE', `/api/shares?token=${folder.token}`);
+    assert.equal((await anon(`/api/public/${folder.token}`)).status, 404);
+    assert.deepEqual((await call('GET', '/api/shares')).data.shares, []);
+  } finally { await srv.stop(); }
+});

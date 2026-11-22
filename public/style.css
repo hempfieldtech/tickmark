@@ -363,3 +363,10 @@ details.card[open] summary { margin-bottom: 4px; }
 .brand-preview { width: 40px; height: 40px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; padding: 4px; background: var(--bg); }
 .brand img { object-fit: contain; }
 .btn:disabled { opacity: .5; cursor: default; }
+
+/* Public links */
+.share-dlg .set-body { display: grid; gap: 12px; }
+.share-dlg .row input { flex: 1; min-width: 0; }
+.warn-note { color: var(--warn); }
+.shares-list-url { font-size: 12px; color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-dlg a { color: var(--accent); }

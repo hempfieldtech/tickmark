@@ -81,6 +81,7 @@
         <button type="button" data-sec="sso">Single sign-on</button>
         <button type="button" data-sec="appearance">Appearance</button>
         <button type="button" data-sec="branding">Branding</button>
+        <button type="button" data-sec="shares">Public links</button>
         <button type="button" id="nav-deleted" title="Synced tasks deleted from any note">Deleted tasks…</button>
       </nav>
       <div class="set-main">
@@ -147,6 +148,14 @@
             </div>
           </div>
           <div class="row"><button type="button" id="btn-brand-save" class="btn primary">Save</button><span class="note" id="brand-state"></span></div>
+        </section>
+
+        <section data-sec="shares" class="set-body">
+          <p class="note">Notes and folders you've shared. Anyone with a link can read what it points to (for a folder, every note in it,
+            including ones added later) but can't change anything or see anything else. Share from a note's <b>⋯</b> menu or a folder's menu in the sidebar.</p>
+          <p class="note warn-note" id="shares-blocked" hidden></p>
+          <ul id="shares-list" class="users"></ul>
+          <p class="note" id="shares-empty" hidden>Nothing is shared.</p>
         </section>
 
         <section data-sec="account" class="set-body">
@@ -296,6 +305,24 @@
   <dialog id="dlg-switcher" class="dlg switcher">
     <input id="switcher-input" placeholder="Jump to note…" autocomplete="off" spellcheck="false">
     <ul id="switcher-list"></ul>
+  </dialog>
+
+  <dialog id="dlg-share" class="dlg small share-dlg" aria-labelledby="share-title">
+    <header class="set-head">
+      <h3 id="share-title">Share</h3>
+      <button type="button" class="icon-btn" data-close aria-label="Close" title="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="set-body">
+      <p class="note warn-note" id="share-blocked" hidden></p>
+      <p class="note" id="share-what"></p>
+      <div id="share-off"><button type="button" id="btn-share-create" class="btn primary">Create public link</button></div>
+      <div id="share-on" hidden>
+        <div class="row"><input id="share-url" readonly aria-label="Public link"><button type="button" id="btn-share-copy" class="btn">Copy</button></div>
+        <div class="row between"><a id="share-open" target="_blank" rel="noopener">Open in a new tab</a>
+          <button type="button" id="btn-share-stop" class="btn danger">Stop sharing</button></div>
+      </div>
+    </div>
   </dialog>
 
   <dialog id="dlg-prompt" class="dlg small">

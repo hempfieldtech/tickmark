@@ -184,6 +184,8 @@ Sync runs on the server, since the server holds the files. The app triggers it a
 
 Source / split / preview (Ctrl+E cycles). Preview checkboxes are clickable and edit the source line; checking an item stamps `✅ date` and moves it, with its sub-items, under a **Complete** heading at the end of its section (unchecking moves it back; Settings → Sync turns this off). That happens for items checked in a task app too. Tasks live in your notes: there is no separate task list view. `[[wikilinks]]` (clicking a missing one creates the note; renaming or moving a note or folder updates links to it), backlinks, #tag search, full-text search, and drag-and-drop in the file tree.
 
+**Public links.** A note's **⋯** menu, or a folder's menu in the sidebar, → **Share…** makes a read-only link anyone can open without signing in (a folder link shows every note in it, including ones added later, and `[[links]]` between them work). Links follow renames, stop when the note goes to the trash, and are listed under Settings → **Public links**, where you can stop sharing. They're only offered when `TICKMARK_PUBLIC_URL` is a domain name (not an IP address or localhost), and links are built from it. Raw HTML in shared notes shows as text.
+
 Settings → **Appearance** has themes (per device) and **custom CSS** (per user, on every device; open Tickmark with `?nocss` to load it without). Settings → **Branding** sets the name, logo and favicon everyone sees, including on the sign-in screen and as the installed app (admins only once sign-in is on).
 
 | Key | |

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>Tickmark</title>
+  <meta name="theme-color" content="#f7f6f3">
+  <script src="/theme.js"></script>
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body.share { overflow: auto; height: auto; min-height: 100vh; background: var(--bg); }
+    .share-top { display: flex; align-items: center; gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+    .share-top .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+    .share-top .crumb { color: var(--muted); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .share-wrap { display: grid; grid-template-columns: 240px minmax(0, 1fr); max-width: 1100px; margin: 0 auto; }
+    .share-wrap.single { grid-template-columns: minmax(0, 1fr); max-width: 820px; }
+    .share-files { padding: 16px 12px; border-right: 1px solid var(--line); min-height: calc(100vh - 53px); }
+    .share-files h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 4px 8px 10px; }
+    .share-files a { display: block; padding: 5px 8px; border-radius: 6px; color: var(--text); text-decoration: none; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .share-files a .dir { color: var(--muted); }
+    .share-files a:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+    .share-files a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .share-main { padding: 28px 32px 64px; min-width: 0; }
+    .share-main h1.share-title { margin-top: 0; }
+    .share-empty, .share-error { color: var(--muted); padding: 40px 0; }
+    .md .wikilink.missing { color: var(--muted); text-decoration: none; cursor: default; }
+    .md input[type=checkbox] { pointer-events: none; }
+    @media (max-width: 760px) {
+      .share-wrap { grid-template-columns: minmax(0, 1fr); }
+      .share-files { border-right: 0; border-bottom: 1px solid var(--line); min-height: 0; }
+      .share-main { padding: 20px 16px 48px; }
+    }
+  </style>
+</head>
+<body class="share">
+  <header class="share-top">
+    <span class="brand"><img src="/icons/icon.svg" alt="" width="22" height="22"> <span class="brand-name">Tickmark</span></span>
+    <span class="crumb" id="crumb"></span>
+  </header>
+  <div class="share-wrap single" id="wrap">
+    <nav class="share-files" id="files" hidden aria-label="Notes in this folder"></nav>
+    <main class="share-main"><article class="md" id="doc"><p class="share-empty">Loading…</p></article></main>
+  </div>
+  <script type="module" src="/share.js"></script>
+</body>
+</html>

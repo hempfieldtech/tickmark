@@ -668,6 +668,7 @@ function treeMenu(row, anchor) {
     items.push({ label: 'New folder here', run: () => newFolder(folder) });
   }
   items.push({ label: 'Rename…', run: () => renamePath(path, folder != null) });
+  items.push({ label: 'Share…', run: () => openShare(path, folder != null) });
   items.push({ label: 'Move to trash', danger: true, run: () => trashPath(path, folder != null) });
   showMenu(anchor, items);
 }
@@ -786,6 +787,7 @@ $('#btn-more').onclick = (e) => {
         if (dest !== null) await movePath(S.path, joinPath(dest.replace(/^\/+|\/+$/g, ''), S.path.split('/').pop()));
       } },
     ] : []),
+    ...(note ? [{ label: 'Share…', run: () => openShare(S.path, false) }] : []),
     { label: 'Sync now', run: () => runSync({ manual: true }) },
     ...(note ? [{ label: 'Deleted tasks in this note…', run: () => openDeleted({ path: S.path }) }] : [{ label: 'Deleted tasks…', run: () => openDeleted() }]),
     { label: 'Theme…', run: () => openSettings('appearance') },
@@ -985,7 +987,7 @@ async function discover(box) {
 
 // The settings pane: a menu of sections. CalDAV accounts and Sync share one form and Save button;
 // the others act immediately (account, users) or have their own Save (single sign-on).
-const SECTIONS = { caldav: 'CalDAV accounts', sync: 'Sync', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', branding: 'Branding' };
+const SECTIONS = { caldav: 'CalDAV accounts', sync: 'Sync', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', branding: 'Branding', shares: 'Public links' };
 const setDlg = $('#dlg-settings');
 const isMulti = () => S.me?.mode === 'multi' && !!S.me.user;
 const isAdmin = () => isMulti() && !!S.me.user.admin;
@@ -1013,6 +1015,7 @@ function showSection(sec) {
   if (sec === 'sso') loadSso();
   if (sec === 'appearance') { renderThemes(); renderCssEditor(); }
   if (sec === 'branding') renderBranding();
+  if (sec === 'shares') loadShares();
 }
 setDlg.querySelectorAll('.set-nav [data-sec]').forEach((b) => (b.onclick = () => showSection(b.dataset.sec)));
 setDlg.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { e.preventDefault(); showSection(g.dataset.goto); } });
@@ -1057,6 +1060,71 @@ $('#themes').addEventListener('click', (e) => {
   renderThemes();
   $(`#themes .theme-opt[data-id="${b.dataset.id}"]`)?.focus();
 });
+
+// ---- public links
+const shareDlg = $('#dlg-share');
+const shareState = { path: null, folder: false, share: null };
+async function openShare(path, folder) {
+  Object.assign(shareState, { path, folder, share: null });
+  const name = folder ? path.split('/').pop() : basename(path);
+  $('#share-title').textContent = `Share “${name}”`;
+  $('#share-what').textContent = folder
+    ? 'Anyone with the link can read every note in this folder, including notes added later. They can\'t change anything or see your other notes.'
+    : 'Anyone with the link can read this note. They can\'t change it or see your other notes.';
+  $('#share-off').hidden = $('#share-on').hidden = true;
+  $('#share-blocked').hidden = true;
+  if (!shareDlg.open) shareDlg.showModal();
+  let r;
+  try { r = await api('GET', '/api/shares'); } catch (e) { toast(e.message); return; }
+  if (r.blocker) { $('#share-blocked').textContent = r.blocker; $('#share-blocked').hidden = false; return; }
+  shareState.share = r.shares.find((x) => x.path === path && x.kind === (folder ? 'folder' : 'note')) || null;
+  renderShare();
+}
+function renderShare() {
+  const sh = shareState.share;
+  $('#share-off').hidden = !!sh;
+  $('#share-on').hidden = !sh;
+  if (sh) { $('#share-url').value = sh.url; $('#share-open').href = sh.url; }
+}
+$('#btn-share-create').onclick = async () => {
+  try {
+    shareState.share = await api('POST', '/api/shares', { path: shareState.path });
+    renderShare();
+    $('#share-url').select();
+    try { await navigator.clipboard.writeText(shareState.share.url); toast('Link created and copied'); } catch { toast('Link created'); }
+  } catch (e) { toast(e.message); }
+};
+$('#btn-share-copy').onclick = async () => {
+  $('#share-url').select();
+  try { await navigator.clipboard.writeText($('#share-url').value); toast('Link copied'); } catch { document.execCommand('copy'); toast('Link copied'); }
+};
+$('#btn-share-stop').onclick = async () => {
+  if (!confirm('Stop sharing? The link stops working, and sharing again makes a new one.')) return;
+  try { await api('DELETE', `/api/shares?token=${enc(shareState.share.token)}`); shareState.share = null; renderShare(); toast('No longer shared'); } catch (e) { toast(e.message); }
+};
+
+async function loadShares() {
+  const ul = $('#shares-list');
+  let r;
+  try { r = await api('GET', '/api/shares'); } catch (e) { ul.innerHTML = `<li class="note err">${esc(e.message)}</li>`; return; }
+  $('#shares-blocked').hidden = !r.blocker;
+  $('#shares-blocked').textContent = r.blocker || '';
+  $('#shares-empty').hidden = !!r.blocker || r.shares.length > 0;
+  ul.hidden = !r.shares.length;
+  ul.innerHTML = '';
+  for (const sh of r.shares) {
+    const li = document.createElement('li');
+    const label = sh.kind === 'folder' ? `📁 ${sh.path}` : basename(sh.path) + (dirname(sh.path) ? ` (${dirname(sh.path)})` : '');
+    li.innerHTML = `<span class="who"><b>${esc(label)}</b><span class="shares-list-url">${esc(sh.url)}</span></span>` +
+      `<button type="button" class="btn" data-act="copy">Copy</button><button type="button" class="btn danger" data-act="stop">Stop</button>`;
+    li.querySelector('[data-act="copy"]').onclick = async () => { try { await navigator.clipboard.writeText(sh.url); toast('Link copied'); } catch { toast(sh.url); } };
+    li.querySelector('[data-act="stop"]').onclick = async () => {
+      if (!confirm(`Stop sharing “${label}”? The link stops working.`)) return;
+      try { await api('DELETE', `/api/shares?token=${enc(sh.token)}`); loadShares(); } catch (e) { toast(e.message); }
+    };
+    ul.append(li);
+  }
+}
 
 // ---- branding: server-wide name, logo and favicon
 /** Show the server's branding everywhere it appears (the server also fills it into the page it sends). */

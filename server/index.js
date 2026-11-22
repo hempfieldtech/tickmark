@@ -25,6 +25,7 @@ import { OIDC, OIDCError } from './oidc.js';
 import { settingsCipher } from './secrets.js';
 import { ServerSettings, SSO_FIELDS } from './server-settings.js';
 import { Branding } from './branding.js';
+import { Shares, shareBlocker } from './shares.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = path.resolve(process.env.TICKMARK_DATA || path.join(ROOT, 'data'));
@@ -55,6 +56,7 @@ try { ensureWritable(DATA); ensureWritable(VAULT); } catch (e) { console.error(e
 const users = new UserStore(DATA);
 const serverSettings = new ServerSettings(DATA);
 const branding = new Branding(DATA);
+const shares = new Shares(DATA);
 const limiter = new LoginLimiter();
 const workspaces = new Map();
 let single = null;
@@ -83,6 +85,7 @@ if (!MULTI) {
 
 /** The single-user notes and settings become the first multi-user account's. */
 function adoptLegacy(u) {
+  shares.adopt(u.name);
   const legacy = ['config.json', 'index.sqlite', 'index.sqlite-wal', 'index.sqlite-shm'].filter((f) => fs.existsSync(path.join(DATA, f)));
   if (!legacy.length) return;
   const p = users.paths(u, { dataRoot: DATA, vaultRoot: VAULT });
@@ -188,6 +191,17 @@ function serveStatic(req, res, pathname) {
   });
 }
 
+function serveShareShell(res) {
+  fs.readFile(path.join(PUBLIC, 'share.html'), 'utf8', (err, src) => {
+    if (err) return json(res, 404, { error: 'Not found' });
+    res.writeHead(200, {
+      'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy': "default-src 'self'; img-src * data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'",
+    });
+    res.end(branding.html(src));
+  });
+}
+
 function cookies(req) {
   const out = {};
   for (const part of (req.headers.cookie || '').split(';')) {
@@ -269,8 +283,27 @@ const routes = {
     const r = ws.vault.create(String(body.path), String(body.content ?? ''));
     return { path: r.path, hash: r.hash };
   },
-  'DELETE /api/file': ({ ws }, q) => { ws.vault.trash(q.get('path')); return { ok: true }; },
-  'POST /api/rename': ({ ws }, q, body) => ({ ok: true, updated: ws.rename(String(body.from), String(body.to)) }),
+  'DELETE /api/file': ({ ws, user }, q) => { ws.vault.trash(q.get('path')); shares.removed(owner(user), q.get('path')); return { ok: true }; },
+  'POST /api/rename': ({ ws, user }, q, body) => {
+    const updated = ws.rename(String(body.from), String(body.to));
+    shares.moved(owner(user), String(body.from), String(body.to));
+    return { ok: true, updated };
+  },
+  // ---- public links
+  'GET /api/shares': ({ user }) => {
+    const blocker = shareBlocker(oidc.publicUrl);
+    return { blocker, shares: blocker ? [] : shares.list(owner(user)).map(shareInfo) };
+  },
+  'POST /api/shares': ({ ws, user }, q, body) => {
+    const blocker = shareBlocker(oidc.publicUrl);
+    if (blocker) throw Object.assign(new Error(blocker), { status: 400 });
+    const rel = String(body.path || '').replace(/^\/+|\/+$/g, '');
+    let st;
+    try { st = fs.statSync(ws.vault.resolve(rel)); } catch { throw Object.assign(new Error('That note or folder no longer exists'), { status: 404 }); }
+    if (st.isFile() && !rel.toLowerCase().endsWith('.md')) throw Object.assign(new Error('Only notes and folders can be shared'), { status: 400 });
+    return shareInfo(shares.create(owner(user), rel, st.isDirectory() ? 'folder' : 'note'));
+  },
+  'DELETE /api/shares': ({ user }, q) => ({ ok: shares.remove(owner(user), q.get('token')) }),
   'POST /api/folder': ({ ws }, q, body) => { ws.vault.mkdir(String(body.path)); return { ok: true }; },
   'GET /api/search': ({ ws }, q) => ws.index.search(q.get('q') || ''),
   'GET /api/backlinks': ({ ws }, q) => ws.index.backlinks(q.get('path') || ''),
@@ -369,10 +402,39 @@ const routes = {
     if (name === user.name) throw new AuthError("You can't remove yourself");
     users.remove(name);
     sessions.destroyUser(name);
+    shares.removeOwner(name);
     closeWorkspace(name);
     return { ok: true };
   },
 };
+const owner = (user) => (MULTI ? user.name : null);
+const shareInfo = ({ owner: _, ...s }) => ({ ...s, url: `${oidc.publicUrl}/s/${s.token}` });
+
+/**
+ * What a public link shows: the note, or for a folder its notes and (with `sub`) one of them.
+ * Anything wrong (unknown token, sharing no longer possible, path outside the folder) is a plain 404.
+ */
+function publicShare(token, sub) {
+  const gone = () => { throw Object.assign(new Error("This link doesn't exist, or is no longer shared."), { status: 404 }); };
+  const s = shares.get(token);
+  if (!s || shareBlocker(oidc.publicUrl)) gone();
+  if (MULTI ? !s.owner || !users.get(s.owner) : s.owner !== null) gone();
+  const ws = workspaceFor(s.owner ?? undefined);
+  const read = (rel) => { try { return ws.vault.read(rel).content; } catch { return gone(); } };
+  const name = (rel) => rel.split('/').pop().replace(/\.md$/i, '');
+  if (s.kind === 'note') return { kind: 'note', name: name(s.path), content: read(s.path) };
+  const files = ws.vault.list().files.map((f) => f.path).filter((p) => p.startsWith(s.path + '/'))
+    .map((p) => p.slice(s.path.length + 1)).sort((a, b) => a.localeCompare(b));
+  if (!files.length && !fs.existsSync(ws.vault.resolve(s.path))) gone();
+  const out = { kind: 'folder', name: name(s.path), files, path: null, content: null };
+  if (sub) {
+    if (!files.includes(sub)) gone();
+    out.path = sub;
+    out.content = read(s.path + '/' + sub);
+  }
+  return out;
+}
+
 function admin(user) { if (!user?.admin) throw new AuthError('Only admins can do that', 403); }
 
 function ssoState(req) {
@@ -455,6 +517,19 @@ async function handleOidc(req, res, url) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
+  // Public links: no sign-in, read-only, and nothing else of the instance is reachable through them.
+  if (req.method === 'GET' && /^\/s\/[\w-]+(\/.*)?$/.test(url.pathname)) return serveShareShell(res);
+  const pub = req.method === 'GET' && url.pathname.match(/^\/api\/public\/([\w-]+)$/);
+  if (pub) {
+    try {
+      const data = publicShare(pub[1], url.searchParams.get('path'));
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' });
+      return res.end(JSON.stringify({ ...data, brand: branding.public() }));
+    } catch (e) {
+      if (!e.status) console.error(e);
+      return json(res, e.status || 500, { error: e.status ? e.message : 'Something went wrong' });
+    }
+  }
   if (!MULTI && !checkBasic(req)) {
     res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Tickmark"' });
     return res.end('Authentication required');
