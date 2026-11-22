@@ -1035,6 +1035,9 @@ function addAccountBox(a = {}) {
   field(box, 'inboxFile').value = a.inboxFile || (first ? 'Inbox.md' : '');
   field(box, 'inboxFile').placeholder = first ? 'Inbox.md' : 'Inbox (name).md';
   box.querySelector('[data-act="discover"]').onclick = () => discover(box);
+  field(box, 'calendarUrl').addEventListener('change', (e) => {
+    if (e.target.value === NEW_LIST) newTaskList(box); else e.target.dataset.last = e.target.value;
+  });
   box.querySelector('[data-act="remove"]').onclick = () => {
     if (box.dataset.id && !confirm(`Remove “${field(box, 'name').value || 'this account'}”? Its tasks stay in your notes and on the server; they just stop syncing.`)) return;
     box.remove();
@@ -1048,6 +1051,29 @@ $('#btn-add-account').onclick = () => {
   box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 };
 
+const NEW_LIST = '__new__';
+/** "+ New task list…" in the Task list menu: name it, create it on the server, and pick it. */
+async function newTaskList(box) {
+  const sel = field(box, 'calendarUrl'), msg = field(box, 'msg');
+  const back = () => { sel.value = sel.dataset.last || ''; };
+  const name = await ask('Name of the new task list', 'Tickmark');
+  if (!name?.trim()) return back();
+  msg.className = 'note';
+  msg.textContent = `Creating “${name.trim()}”…`;
+  try {
+    const c = await api('POST', '/api/caldav/calendars', {
+      accountId: box.dataset.id || undefined, name: name.trim(),
+      url: field(box, 'url').value.trim(), username: field(box, 'username').value.trim(), password: field(box, 'password').value,
+    });
+    const opt = new Option(c.name, c.url);
+    sel.insertBefore(opt, sel.querySelector(`option[value="${NEW_LIST}"]`));
+    sel.value = c.url;
+    sel.dataset.last = c.url;
+    if (!field(box, 'name').value.trim()) field(box, 'name').value = c.name;
+    msg.textContent = `Created “${c.name}”. Save to start syncing with it.`;
+  } catch (e) { back(); msg.textContent = e.message; msg.className = 'note err'; }
+}
+
 async function discover(box) {
   const msg = field(box, 'msg');
   msg.className = 'note';
@@ -1060,7 +1086,9 @@ async function discover(box) {
     if (!calendars.length) { msg.textContent = 'No calendars that support tasks (VTODO) were found at that URL.'; msg.className = 'note err'; return; }
     const sel = field(box, 'calendarUrl');
     const cur = sel.value;
-    sel.innerHTML = calendars.map((c) => `<option value="${esc(c.url)}"${c.url === cur ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
+    sel.innerHTML = calendars.map((c) => `<option value="${esc(c.url)}"${c.url === cur ? ' selected' : ''}>${esc(c.name)}</option>`).join('') +
+      `<option value="${NEW_LIST}">+ New task list…</option>`;
+    sel.dataset.last = sel.value;
     if (!field(box, 'name').value.trim()) field(box, 'name').value = sel.selectedOptions[0]?.textContent || '';
     msg.textContent = `Found ${calendars.length} task list${calendars.length === 1 ? '' : 's'}.`;
   } catch (e) { msg.textContent = e.message; msg.className = 'note err'; }
@@ -1315,7 +1343,7 @@ form.addEventListener('submit', async (e) => {
       id: box.dataset.id || undefined,
       name: field(box, 'name').value.trim(),
       url: field(box, 'url').value.trim(), username: field(box, 'username').value.trim(), password: field(box, 'password').value,
-      calendarUrl: sel.value, calendarName: sel.value ? sel.selectedOptions[0]?.textContent || '' : '',
+      calendarUrl: sel.value === NEW_LIST ? '' : sel.value, calendarName: sel.value && sel.value !== NEW_LIST ? sel.selectedOptions[0]?.textContent || '' : '',
       itemTags: field(box, 'itemTags').value, sectionTags: field(box, 'sectionTags').value, inboxFile: field(box, 'inboxFile').value,
     };
   // An untouched blank account box is not an account.

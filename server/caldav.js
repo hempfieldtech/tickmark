@@ -191,6 +191,35 @@ export class CalDAV {
 
   /** Find calendars that can hold todos, starting from any URL (server root, principal, home or calendar). */
   async discover() {
+    const { home, calendar } = await this.findHome();
+    if (calendar) return [calendar];
+    const list = await this.propfind(home,
+      '<d:resourcetype/><d:displayname/><c:supported-calendar-component-set/><ic:calendar-color/>', 1);
+    return list.map((r) => this.describe(r)).filter(Boolean);
+  }
+
+  /**
+   * Make a new task list (a calendar for VTODOs) in the user's calendar home. Returns { url, name }.
+   * If the account URL points straight at a calendar, the new one goes next to it.
+   */
+  async createCalendar(name) {
+    name = String(name || '').trim();
+    if (!name) throw new CalDAVError('Give the new task list a name', 400);
+    const { home, calendar } = await this.findHome();
+    const parent = calendar ? new URL('..', calendar.url.replace(/\/?$/, '/')).href : home.replace(/\/?$/, '/');
+    const slug = name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'tasks';
+    const url = new URL(`${slug}-${crypto.randomUUID().slice(0, 8)}/`, parent).href;
+    const xml = (s) => s.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c]);
+    await this.request('MKCALENDAR', url, {
+      body: '<?xml version="1.0" encoding="utf-8"?><c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:set><d:prop>' +
+        `<d:displayname>${xml(name)}</d:displayname>` +
+        '<c:supported-calendar-component-set><c:comp name="VTODO"/></c:supported-calendar-component-set></d:prop></d:set></c:mkcalendar>',
+    });
+    return { url, name };
+  }
+
+  /** The user's calendar home URL, or (when the account URL is itself a calendar) that calendar. */
+  async findHome() {
     const start = this.url;
     const first = await this.propfind(start,
       '<d:resourcetype/><d:displayname/><d:current-user-principal/><c:calendar-home-set/><c:supported-calendar-component-set/>').catch(async (e) => {
@@ -202,7 +231,8 @@ export class CalDAV {
     });
     const me = first[0];
     if (me && find(find(me.props, 'resourcetype') || { children: [] }, 'calendar')) {
-      return [this.describe(me)].filter(Boolean);
+      const calendar = this.describe(me);
+      if (calendar) return { calendar };
     }
     let home = me && text(find(find(me.props, 'calendar-home-set') || { children: [] }, 'href'));
     if (!home) {
@@ -216,10 +246,7 @@ export class CalDAV {
       home = pr[0] && text(find(pr[0].props, 'href'));
       if (!home) throw new CalDAVError('Server did not report a calendar-home-set', 0);
     }
-    const homeUrl = new URL(home, start).href;
-    const list = await this.propfind(homeUrl,
-      '<d:resourcetype/><d:displayname/><c:supported-calendar-component-set/><ic:calendar-color/>', 1);
-    return list.map((r) => this.describe(r)).filter(Boolean);
+    return { home: new URL(home, start).href };
   }
 
   describe(r) {

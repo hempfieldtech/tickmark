@@ -318,6 +318,15 @@ const routes = {
     });
     return { calendars: await client.discover() };
   },
+  'POST /api/caldav/calendars': async ({ ws }, q, body) => {
+    const saved = body.accountId ? ws.config.account(body.accountId) : null;
+    const client = new CalDAV({
+      url: body.url || saved?.url,
+      username: body.username ?? saved?.username,
+      password: body.password || saved?.password,
+    });
+    return await client.createCalendar(body.name);
+  },
   // ---- recently deleted synced tasks (kept 30 days)
   'GET /api/deleted': ({ ws }) => {
     const names = new Map(ws.config.get().accounts.map((a) => [a.id, a.name]));

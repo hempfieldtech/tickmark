@@ -469,3 +469,17 @@ test('notes changed outside Tickmark sync on their own', { skip: !URL_ && 'set C
     assert.match(fs.readFileSync(path.join(dir, 'vault', 'Outside.md'), 'utf8'), /#task \^t\w+\n$/);
   } finally { ws.close(); }
 });
+
+test('a new task list can be created from Settings', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, async () => {
+  const client = new CalDAV({ url: URL_, username: USER, password: PASS });
+  const before = await client.discover();
+  const c = await client.createCalendar('Errands & "Stuff"');
+  assert.match(c.url, /\/errands-stuff-[0-9a-f]{8}\/$/);
+  const after = await client.discover();
+  assert.equal(after.length, before.length + 1);
+  assert.equal(after.find((x) => x.url.replace(/\/$/, '') === c.url.replace(/\/$/, '') || x.url.endsWith(new URL(c.url).pathname))?.name, 'Errands & "Stuff"');
+  // Pointing the account at a calendar directly: the new one goes next to it.
+  const direct = new CalDAV({ url: c.url, username: USER, password: PASS });
+  const d = await direct.createCalendar('Sibling');
+  assert.equal(new URL('..', d.url).href, new URL('..', c.url).href);
+});
