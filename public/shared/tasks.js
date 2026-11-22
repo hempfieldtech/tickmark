@@ -132,7 +132,8 @@ export function parseTasks(text, { itemTags = ['task'], sectionTags = ['sync'] }
     const t = parseTaskBody(m[4], itemSet);
     // Section tags in effect, innermost heading first, then the note's frontmatter.
     const scopeTags = [...[...stack].reverse().flatMap((s) => s.scope), ...fileScope];
-    const synced = t.syncTags.length > 0 || scopeTags.length > 0;
+    // An empty checkbox (still being written, or a placeholder) has nothing to sync yet.
+    const synced = !!t.title.trim() && (t.syncTags.length > 0 || scopeTags.length > 0);
     out.push({
       line: i,
       prefix: m[1],

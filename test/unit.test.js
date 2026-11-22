@@ -294,3 +294,8 @@ test('settings keep custom CSS and the move-completed switch', async () => {
   assert.equal(again.moveCompleted, false);
   assert.throws(() => c.update({ customCss: 'x'.repeat(100_001) }), /100 KB/);
 });
+
+test('an empty checkbox is not synced (and gets no block id) until it has text', () => {
+  const text = '## Groceries #sync\n- [ ] \n- [ ]\n- [ ] #task\n- [ ] Milk\n';
+  assert.deepEqual(parseTasks(text, opts).map((t) => [t.title, t.synced]), [['', false], ['', false], ['', false], ['Milk', true]]);
+});
