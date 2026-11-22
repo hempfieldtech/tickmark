@@ -239,3 +239,23 @@ test('character count uses the same syntax stripping', async () => {
   assert.deepEqual(textStats('- [ ] Buy milk #task 📅 2026-11-25\n- [x] Café'), { words: 4, chars: 17 });
   assert.deepEqual(textStats('one - two'), { words: 2, chars: 7 });
 });
+
+test('renaming a note rewrites [[links]] to it', async () => {
+  const { rewriteLinks, movedNotes } = await import('../server/links.js');
+  const before = ['Ideas.md', 'Work/Plan.md', 'Home/Plan.md', 'Index.md'];
+  const move = (from, to) => {
+    const moved = movedNotes(from, to, before);
+    return (text) => rewriteLinks(text, moved, before, before.map((p) => moved.get(p) || p));
+  };
+  const r = move('Ideas.md', 'Projects/Someday.md');
+  assert.equal(r('See [[Ideas]], [[ideas#Later|my list]] and ![[Ideas.md]].'),
+    'See [[Someday]], [[Someday#Later|my list]] and ![[Someday.md]].', 'by name stays by name; fragment, alias, .md kept');
+  assert.equal(r('`[[Ideas]]` and\n```\n[[Ideas]]\n```\n'), null, 'code is left alone');
+  assert.equal(r('[[Plan]] [[Other]]'), null, 'unrelated links untouched');
+  assert.equal(move('Work/Plan.md', 'Work/Roadmap.md')('[[Work/Plan]] and [[Plan]]'), '[[Work/Roadmap]] and [[Roadmap]]');
+  assert.equal(move('Home/Plan.md', 'Home/Ideas.md')('[[Home/Plan|home]]'), '[[Home/Ideas|home]]');
+  const dupe = (() => { const b = ['Ideas.md', 'Work/Plan.md']; const m = movedNotes('Ideas.md', 'Archive/Plan.md', b);
+    return rewriteLinks('[[Ideas]]', m, b, ['Archive/Plan.md', 'Work/Plan.md']); })();
+  assert.equal(dupe, '[[Archive/Plan]]', 'a name that is now ambiguous becomes a path');
+  assert.equal(move('Work', 'Office')('[[Work/Plan#Q1]] [[Plan]]'), '[[Office/Plan#Q1]] [[Plan]]', 'folder moves update paths');
+});

@@ -367,9 +367,19 @@ function updateSaveState(kind) {
   if (kind === 'offline' || store.get(pendingKey(S.path))) { s.textContent = 'Offline: saved on this device'; s.className = 'warn'; }
   else if (kind === 'error') { s.textContent = 'Save failed'; s.className = 'err'; }
   else if (S.saving) s.textContent = 'Saving…';
-  else if (el.editor.value !== S.base) s.textContent = 'Edited';
-  else s.textContent = '';
+  else s.textContent = savedLabel(S.savedAt);
+  s.title = S.savedAt && !s.className ? new Date(S.savedAt).toLocaleString() : '';
 }
+/** "Saved just now" / "Saved 5 min ago" / "Saved at 9:41 AM" / "Saved Nov 20": when the note last hit the disk. */
+function savedLabel(t) {
+  if (!t) return '';
+  const s = (Date.now() - t) / 1000, d = new Date(t);
+  if (s < 45) return 'Saved just now';
+  if (s < 3600) return `Saved ${Math.round(s / 60)} min ago`;
+  if (d.toDateString() === new Date().toDateString()) return `Saved at ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  return `Saved ${d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() && { year: 'numeric' }) })}`;
+}
+setInterval(() => { if (!S.saving) updateSaveState(); }, 30000);
 
 const scheduleSave = debounce(() => save(), 700);
 
@@ -392,6 +402,7 @@ async function save() {
       } else {
         S.base = content;
       }
+      S.savedAt = Date.now();
       updateSaveState();
       scheduleSync(4000);
     } catch (e) {
@@ -421,6 +432,7 @@ async function flushPending() {
     try {
       const r = await api('PUT', `/api/file?path=${enc(path)}`, p);
       store.del(pendingKey(path));
+      if (path === S.path) S.savedAt = Date.now();
       if (path === S.path && el.editor.value === p.content) {
         S.base = r.merged ? r.content : p.content;
         S.hash = r.hash;
@@ -470,6 +482,7 @@ async function open(path, { line = null, push = true } = {}) {
   S.path = path;
   S.base = file.content;
   S.hash = file.hash;
+  S.savedAt = file.mtime || null;
   S.mode = 'note';
   el.editor.value = pend ? pend.content : file.content;
   store.set('last', path);
@@ -507,8 +520,10 @@ async function reloadIfClean() {
     if (el.editor.value !== S.base || f.path !== S.path) return;
     S.base = f.content;
     S.hash = f.hash;
+    S.savedAt = f.mtime || S.savedAt;
     setEditorText(f.content);
     renderPreview();
+    updateSaveState();
   } catch {}
 }
 
@@ -671,13 +686,15 @@ el.tree.addEventListener('drop', async (e) => {
 async function movePath(from, to) {
   try {
     await flushSave();
-    await api('POST', '/api/rename', { from, to });
+    const r = await api('POST', '/api/rename', { from, to });
+    if (r.updated?.length) toast(`Updated links in ${r.updated.length} note${r.updated.length === 1 ? '' : 's'}`);
     if (S.path === from || S.path?.startsWith(from + '/')) {
       S.path = to + S.path.slice(from.length);
       history.replaceState(null, '', '#' + enc(S.path));
       el.title.value = basename(S.path);
       el.crumbs.textContent = dirname(S.path) ? dirname(S.path).replaceAll('/', ' / ') + ' /' : '';
     }
+    if (r.updated?.includes(S.path)) reloadIfClean();
     await loadTree();
   } catch (e) { toast(e.message); }
 }
@@ -756,7 +773,7 @@ $('#btn-more').onclick = (e) => {
       } },
     ] : []),
     { label: 'Sync now', run: () => runSync({ manual: true }) },
-    { label: 'Deleted tasks…', run: openDeleted },
+    ...(note ? [{ label: 'Deleted tasks in this note…', run: () => openDeleted({ path: S.path }) }] : [{ label: 'Deleted tasks…', run: () => openDeleted() }]),
     { label: 'Theme…', run: () => openSettings('appearance') },
     ...(note ? [{ label: 'Move to trash', danger: true, run: () => trashPath(S.path, false) }] : []),
   ]);
@@ -865,7 +882,7 @@ async function runSync({ manual = false, force = false } = {}) {
   if (!r.ok) {
     if (r.needsForce) toast(r.error, { label: 'Sync anyway', run: () => runSync({ manual: true, force: true }) });
     else if (manual) toast(r.error);
-  } else if (manual && !(r.result.deletedLocal + r.result.deletedRemote)) { // deletions get their own notice
+  } else if (manual && !trashedCount(r.result)) { // recoverable deletions get their own notice
     const x = r.result;
     const n = x.created + x.pushed + x.pulled + x.imported + x.deletedLocal + x.deletedRemote;
     toast(n ? `Synced: ${x.created + x.pushed} sent, ${x.pulled + x.imported} received${x.deletedLocal + x.deletedRemote ? `, ${x.deletedLocal + x.deletedRemote} deleted` : ''}` : 'Everything is up to date');
@@ -1050,18 +1067,22 @@ form.addEventListener('submit', async (e) => {
 // ---------------------------------------------------------------- deleted tasks
 const SOURCE = { notes: 'removed from your notes', remote: 'deleted in a task app', both: 'deleted in both places' };
 
+/** Tasks a sync put in Deleted tasks. Removing a tag deletes the todo but keeps the line, so it isn't counted. */
+const trashedCount = (r) => (r ? r.trashed ?? r.deletedLocal + r.deletedRemote : 0);
 /** After any sync (this device's, another's, or the server's timer) that deleted tasks, offer a way back. */
 function noticeDeletions(st) {
   const r = st.lastResult;
-  const n = r ? r.deletedLocal + r.deletedRemote : 0;
+  const n = trashedCount(r);
   if (!n || !st.lastRun || st.lastRun === S.deletionsNoticed) return;
   S.deletionsNoticed = st.lastRun;
   if (Date.now() - new Date(st.lastRun) > 60000) return; // an old result replayed on connect
-  toast(`${n} synced task${n === 1 ? ' was' : 's were'} deleted`, { label: 'Review', run: openDeleted });
+  toast(`${n} synced task${n === 1 ? ' was' : 's were'} deleted`, { label: 'Review', run: () => openDeleted() });
 }
 
 const delDlg = $('#dlg-deleted');
-function openDeleted() {
+/** The Deleted tasks dialog: every note's, or (with `path`) just the tasks deleted from that note. */
+function openDeleted({ path = null } = {}) {
+  S.deletedScope = path;
   loadDeleted();
   if (!delDlg.open) delDlg.showModal();
 }
@@ -1070,8 +1091,14 @@ async function loadDeleted() {
   const ul = $('#deleted-list');
   let list;
   try { list = await api('GET', '/api/deleted'); } catch (e) { ul.innerHTML = `<li class="note err">${esc(e.message)}</li>`; return; }
+  const scope = S.deletedScope;
+  if (scope) list = list.filter((d) => d.path === scope);
+  const scopeEl = $('#deleted-scope');
+  scopeEl.hidden = !scope;
+  if (scope) scopeEl.querySelector('b').textContent = basename(scope);
+  $('#deleted-empty').textContent = scope ? 'Nothing deleted from this note recently.' : 'Nothing deleted recently.';
   $('#deleted-empty').hidden = list.length > 0;
-  $('#btn-empty-deleted').hidden = !list.length;
+  $('#btn-empty-deleted').hidden = !list.length || !!scope;
   ul.hidden = !list.length;
   ul.innerHTML = '';
   for (const d of list) {
@@ -1092,7 +1119,7 @@ async function loadDeleted() {
       try {
         const r = await api('POST', '/api/deleted/restore', { id: d.id });
         const into = r.section && r.section.toLowerCase() !== basename(r.path).toLowerCase() ? ` › ${r.section}` : '';
-        toast(`Restored “${d.title}” to ${basename(r.path)}${into}`, { label: 'Open', run: () => { delDlg.close(); open(r.path); } });
+        toast(`Restored “${d.title}” to ${basename(r.path)}${into}`, { label: 'Open', run: () => { delDlg.close(); if (setDlg.open) setDlg.close(); open(r.path); } });
         loadDeleted();
         if (syncConfigured()) scheduleSync(1500);
       } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
@@ -1104,6 +1131,8 @@ async function loadDeleted() {
     ul.append(li);
   }
 }
+$('#btn-deleted-all').onclick = () => { S.deletedScope = null; loadDeleted(); };
+$('#nav-deleted').onclick = () => openDeleted();
 $('#btn-empty-deleted').onclick = async () => {
   if (!confirm("Delete everything in Deleted tasks forever? None of it can be restored after this.")) return;
   try { await api('DELETE', '/api/deleted?id=all'); loadDeleted(); } catch (e) { toast(e.message); }

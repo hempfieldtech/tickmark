@@ -255,7 +255,7 @@ const routes = {
     return { path: r.path, hash: r.hash };
   },
   'DELETE /api/file': ({ ws }, q) => { ws.vault.trash(q.get('path')); return { ok: true }; },
-  'POST /api/rename': ({ ws }, q, body) => { ws.vault.rename(String(body.from), String(body.to)); return { ok: true }; },
+  'POST /api/rename': ({ ws }, q, body) => ({ ok: true, updated: ws.rename(String(body.from), String(body.to)) }),
   'POST /api/folder': ({ ws }, q, body) => { ws.vault.mkdir(String(body.path)); return { ok: true }; },
   'GET /api/search': ({ ws }, q) => ws.index.search(q.get('q') || ''),
   'GET /api/backlinks': ({ ws }, q) => ws.index.backlinks(q.get('path') || ''),

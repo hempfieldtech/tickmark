@@ -45,8 +45,10 @@ export function accountFor(task, accounts) {
   return null;
 }
 
-const emptyResult = () => ({ pushed: 0, pulled: 0, created: 0, imported: 0, deletedRemote: 0, deletedLocal: 0, errors: [] });
-const COUNTS = ['pushed', 'pulled', 'created', 'imported', 'deletedRemote', 'deletedLocal'];
+/** Heading for restored tasks whose own heading no longer exists. */
+const RESTORED = 'Restored tasks';
+const emptyResult = () => ({ pushed: 0, pulled: 0, created: 0, imported: 0, deletedRemote: 0, deletedLocal: 0, trashed: 0, errors: [] });
+const COUNTS = ['pushed', 'pulled', 'created', 'imported', 'deletedRemote', 'deletedLocal', 'trashed'];
 
 export class SyncEngine {
   constructor({ vault, index, getConfig, onStatus = () => {}, log = console.log }) {
@@ -192,12 +194,18 @@ export class SyncEngine {
     this.vault.modify(target, (text) => {
       const lines = text ? text.replace(/\n+$/, '').split('\n') : ['# Inbox', ''];
       for (const [i, line] of candidates.entries()) {
-        // Back under its heading if that's still there.
-        const placed = target === e.path && e.section ? insertInSection(lines, e.section, line) : null;
+        // Back under its heading if that's still there. If the heading is gone (or so is the note),
+        // under a "Restored tasks" heading, so it's easy to find; tasks that had no heading go at the end.
+        let placed = target === e.path && e.section ? insertInSection(lines, e.section, line) : null, into = e.section;
+        if (!placed && e.section) {
+          into = RESTORED;
+          placed = insertInSection(lines, RESTORED, line);
+          if (!placed) { const l = [...lines]; while (l.length && !l.at(-1).trim()) l.pop(); placed = [...l, '', `## ${RESTORED}`, line]; }
+        }
         const out = placed || [...lines, line];
         const last = i === candidates.length - 1;
         if (last || parseTasks(out.join('\n'), allTags).some((t) => t.blockId === bid && t.synced)) {
-          section = placed ? e.section : null;
+          section = placed ? into : null;
           return out.join('\n') + '\n';
         }
       }
@@ -416,5 +424,7 @@ export class SyncEngine {
       }
       for (const t of trash) this.index.addDeleted(t);
     });
+    // What landed in Deleted tasks (a removed tag deletes the todo but leaves the line: nothing to restore).
+    result.trashed += trash.length;
   }
 }

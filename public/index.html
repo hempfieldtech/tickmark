@@ -80,6 +80,7 @@
         <button type="button" data-sec="users">Users</button>
         <button type="button" data-sec="sso">Single sign-on</button>
         <button type="button" data-sec="appearance">Appearance</button>
+        <button type="button" id="nav-deleted" title="Synced tasks deleted from any note">Deleted tasks…</button>
       </nav>
       <div class="set-main">
         <header class="set-head">
@@ -249,6 +250,8 @@
     <div class="set-body">
       <p class="note">Synced tasks that were deleted, in your notes or in a task app, are kept here for 30 days.
         Restoring one puts the line back in its note (or your inbox, if the note is gone) and the task back on your CalDAV server.</p>
+      <p class="scope" id="deleted-scope" hidden>Showing tasks deleted from <b></b>.
+        <button type="button" class="linkish" id="btn-deleted-all">Show all notes</button></p>
       <ul id="deleted-list" class="users deleted"></ul>
       <p class="note" id="deleted-empty" hidden>Nothing deleted recently.</p>
       <div><button type="button" id="btn-empty-deleted" class="btn danger" hidden>Empty Deleted tasks…</button></div>

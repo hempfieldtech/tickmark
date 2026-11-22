@@ -348,3 +348,7 @@ details.card[open] summary { margin-bottom: 4px; }
 .sw-line.short { width: 60%; background: var(--muted); }
 .sw-dot { position: absolute; right: 10px; bottom: 10px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); }
 .sw[data-theme="terminal"] { background: repeating-linear-gradient(to bottom, var(--bg) 0 2px, #000 2px 3px); }
+
+/* Deleted tasks: scoped to one note */
+.deleted-dlg .scope { margin: 0; font-size: 13px; color: var(--muted); }
+.linkish { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }

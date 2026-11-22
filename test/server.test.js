@@ -481,3 +481,18 @@ test('SSO configured from Settings', async (t) => {
     idp.close();
   }
 });
+
+test('renaming a note updates [[links]] to it in other notes', async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault') });
+  const c = client(srv.base);
+  try {
+    await c.call('POST', '/api/file', { path: 'Ideas.md', content: 'Some ideas\n' });
+    await c.call('POST', '/api/file', { path: 'Daily.md', content: 'Read [[Ideas]] and [[Ideas#Later|later]].\n' });
+    await c.call('POST', '/api/file', { path: 'Other.md', content: 'No links here\n' });
+    const r = await c.call('POST', '/api/rename', { from: 'Ideas.md', to: 'Projects/Someday.md' });
+    assert.deepEqual(r.data, { ok: true, updated: ['Daily.md'] });
+    assert.equal(fs.readFileSync(path.join(dir, 'vault', 'Daily.md'), 'utf8'), 'Read [[Someday]] and [[Someday#Later|later]].\n');
+    assert.deepEqual((await c.call('GET', '/api/backlinks?path=Projects%2FSomeday.md')).data, ['Daily.md']);
+  } finally { await srv.stop(); }
+});

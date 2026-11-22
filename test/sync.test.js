@@ -312,6 +312,7 @@ test('recently deleted tasks can be restored', { skip: !URL_ && 'set CALDAV_TEST
     write('Work.md', read('Work.md').replace(/^- \[ \] Send invoice.*\n/m, ''));
     const r = await engine.run();
     assert.equal(r.deletedRemote, 1);
+    assert.equal(r.trashed, 1);
     const [d] = index.listDeleted();
     assert.deepEqual([d.title, d.source, d.hasCopy, d.path], ['Send invoice', 'notes', true, 'Work.md']);
   });
@@ -342,7 +343,9 @@ test('recently deleted tasks can be restored', { skip: !URL_ && 'set CALDAV_TEST
 
   await t.test('removing the tag is not a deletion to recover', async () => {
     write('Work.md', read('Work.md').replace('Call Sam #task', 'Call Sam'));
-    assert.equal((await engine.run()).deletedRemote, 1);
+    const r = await engine.run();
+    assert.equal(r.deletedRemote, 1);
+    assert.equal(r.trashed, 0, 'so no "tasks were deleted" notice');
     assert.equal(index.listDeleted().length, 0);
   });
 
@@ -364,6 +367,13 @@ test('recently deleted tasks can be restored', { skip: !URL_ && 'set CALDAV_TEST
     assert.equal((await engine.run()).created, 0, 'still linked to its todo');
   });
 
+  await t.test('if its heading is gone, it comes back under "Restored tasks"', async () => {
+    write('Home.md', read('Home.md').replace('## Chores', '## Housework'));
+    const d = index.listDeleted().find((x) => x.title === 'Vacuum');
+    assert.equal((await engine.restore(d.id)).section, 'Restored tasks');
+    assert.match(read('Home.md'), /## Housework\n\n## Restored tasks\n- \[ \] Vacuum #task \^t\w+\n$/);
+  });
+
   await t.test('if the note is gone, the task comes back in the inbox', async () => {
     write('Errands.md', '- [ ] Pick up parcel #task\n');
     await engine.run();
@@ -373,4 +383,33 @@ test('recently deleted tasks can be restored', { skip: !URL_ && 'set CALDAV_TEST
     assert.equal((await engine.restore(d.id)).path, 'Inbox.md');
     assert.match(read('Inbox.md'), /- \[ \] Pick up parcel #task \^t\w+/);
   });
+});
+
+test('notes changed outside Tickmark sync on their own', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, async () => {
+  const { Workspace } = await import('../server/workspace.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tickmark-'));
+  const calUrl = new URL(`/${USER}/tickmark-watch-${Date.now()}/`, URL_).href;
+  const client = new CalDAV({ url: URL_, username: USER, password: PASS });
+  await client.request('MKCALENDAR', calUrl, {
+    body: '<?xml version="1.0"?><c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:set><d:prop>' +
+      '<c:supported-calendar-component-set><c:comp name="VTODO"/></c:supported-calendar-component-set></d:prop></d:set></c:mkcalendar>',
+  });
+  fs.mkdirSync(path.join(dir, 'data'));
+  fs.mkdirSync(path.join(dir, 'vault'));
+  fs.writeFileSync(path.join(dir, 'data', 'config.json'), JSON.stringify({ accounts: [
+    { id: 'a1', name: 'Test', url: URL_, username: USER, password: PASS, calendarUrl: calUrl, itemTags: ['task'], sectionTags: ['sync'], inboxFile: 'Inbox.md' }] }));
+  const ws = new Workspace({ dataDir: path.join(dir, 'data'), vaultDir: path.join(dir, 'vault') });
+  try {
+    // Another editor writes the note; nothing in Tickmark saves it.
+    fs.writeFileSync(path.join(dir, 'vault', 'Outside.md'), '- [ ] Written elsewhere #task\n');
+    let todos = [];
+    for (let i = 0; i < 40 && !todos.length; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      todos = await client.listTodos(calUrl);
+    }
+    assert.equal(todos.length, 1, 'the new task reached the server');
+    assert.match(todos[0].ics, /SUMMARY:Written elsewhere/);
+    await ws.sync.running?.catch(() => {});
+    assert.match(fs.readFileSync(path.join(dir, 'vault', 'Outside.md'), 'utf8'), /#task \^t\w+\n$/);
+  } finally { ws.close(); }
 });

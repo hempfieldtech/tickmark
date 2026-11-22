@@ -7,6 +7,10 @@ import { Vault } from './vault.js';
 import { Index } from './db.js';
 import { Config } from './config.js';
 import { SyncEngine } from './sync.js';
+import { movedNotes, rewriteLinks } from './links.js';
+
+/** How long after a file changes outside Tickmark to sync it (editors often write in several steps). */
+const EXTERNAL_SYNC_DELAY = Number(process.env.TICKMARK_EXTERNAL_SYNC_MS) || 3000;
 
 export class Workspace {
   constructor({ name = null, dataDir, vaultDir, cipher }) {
@@ -61,8 +65,23 @@ export class Workspace {
     this.scanTimer = setTimeout(() => {
       const { changed, removed } = this.index.scan(this.vault);
       for (const p of changed) this.broadcast('file', { path: p, hash: this.hashOf(p) });
-      if (changed.length || removed.length) this.broadcast('tree', {});
+      if (changed.length || removed.length) {
+        this.broadcast('tree', {});
+        // In-app saves are indexed as they're written, so anything the scan finds was changed outside
+        // Tickmark (another editor, a file sync tool): sync it too, rather than waiting for the next save.
+        this.scheduleExternalSync();
+      }
     }, 250);
+  }
+
+  scheduleExternalSync(ms = EXTERNAL_SYNC_DELAY) {
+    if (!this.config.get().accounts.some((a) => a.url && a.calendarUrl)) return;
+    clearTimeout(this.externalSyncTimer);
+    this.externalSyncTimer = setTimeout(() => {
+      // A sync already under way may have read the files before this change: go again once it's done.
+      if (this.sync.running) return this.sync.running.catch(() => {}).finally(() => this.scheduleExternalSync(500));
+      this.sync.run().catch(() => {});
+    }, ms);
   }
 
   scheduleServerSync() {
@@ -70,6 +89,29 @@ export class Workspace {
     const mins = this.config.get().serverSyncMinutes;
     const ready = this.config.get().accounts.some((a) => a.url && a.calendarUrl);
     if (mins > 0 && ready) this.serverTimer = setInterval(() => this.sync.run().catch(() => {}), mins * 60000);
+  }
+
+  /**
+   * Rename or move a note or folder, and update [[links]] to the notes that moved.
+   * Returns the notes whose links were rewritten (at their new paths).
+   */
+  rename(from, to) {
+    const before = this.vault.list().files.map((f) => f.path);
+    const moved = movedNotes(from, to, before);
+    // Notes that link anywhere, per the index (brought up to date first, in case of external edits).
+    this.index.scan(this.vault);
+    const linking = this.index.db.prepare('SELECT DISTINCT src FROM links').all().map((r) => r.src);
+    this.vault.rename(from, to);
+    if (!moved.size) return [];
+    const after = before.map((p) => moved.get(p) || p);
+    const updated = [];
+    for (const src of linking) {
+      const p = moved.get(src) || src;
+      try {
+        if (this.vault.modify(p, (text) => rewriteLinks(text, moved, before, after))) updated.push(p);
+      } catch (e) { console.warn(`Couldn't update links in ${p}:`, e.message); }
+    }
+    return updated;
   }
 
   /** Apply a settings change; re-index if the set of synced tags changed. */
@@ -85,6 +127,7 @@ export class Workspace {
 
   close() {
     clearTimeout(this.scanTimer);
+    clearTimeout(this.externalSyncTimer);
     clearInterval(this.serverTimer);
     this.watcher?.close();
     for (const res of this.clients) res.end();
