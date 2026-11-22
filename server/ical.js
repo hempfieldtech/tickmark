@@ -170,7 +170,7 @@ const prop = (raw) => parseProp(raw);
  * Build the ICS for a todo. If `existing` (ICS text) is given, only the fields that
  * differ from it are rewritten.
  */
-export function buildTodo({ existing = null, uid, model, tickmarkId, description, doneDate }) {
+export function buildTodo({ existing = null, uid, model, tickmarkId, description, doneDate, fromNote = null }) {
   let root, vtodo, prev = null;
   const now = utcStamp();
   if (existing) {
@@ -189,6 +189,14 @@ export function buildTodo({ existing = null, uid, model, tickmarkId, description
   const drop = (...names) => { vtodo.props = vtodo.props.filter((p) => !names.includes(p.name)); };
   const add = (raw) => vtodo.props.push(prop(raw));
 
+  // The note moved or was renamed: point the "From note:" line Tickmark wrote at its new path,
+  // leaving anything else in the description alone.
+  if (fromNote && vtodo) {
+    const d = getProp(vtodo, 'DESCRIPTION');
+    const text = d ? unescapeText(d.value) : '';
+    const next = /^From note:.*$/im.test(text) ? text.replace(/^From note:.*$/im, `From note: ${fromNote}`) : null;
+    if (next != null && next !== text) { drop('DESCRIPTION'); add(`DESCRIPTION:${escapeText(next)}`); }
+  }
   if (!prev || prev.title !== model.title) { drop('SUMMARY'); add(`SUMMARY:${escapeText(model.title)}`); }
   if (!prev || prev.done !== model.done || (prev.status || null) !== (model.status || null)) {
     drop('STATUS', 'COMPLETED', 'PERCENT-COMPLETE');

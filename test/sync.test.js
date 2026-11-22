@@ -140,11 +140,23 @@ test('bi-directional sync', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, asy
     assert.match(r.ics, /STATUS:CANCELLED/);
   });
 
+  await t.test('renaming a note updates "From note:" on its todos', async () => {
+    write('Projects/Old name.md', '- [ ] Follow up #task\n');
+    await engine.run();
+    assert.match((await byTitle('Follow up')).ics, /DESCRIPTION:From note: Projects\/Old name\.md/);
+    vault.rename('Projects/Old name.md', 'Archive/New name.md');
+    const r = await engine.run();
+    assert.equal(r.created, 0);
+    assert.match((await byTitle('Follow up')).ics, /DESCRIPTION:From note: Archive\/New name\.md/);
+    assert.equal((await engine.run()).pushed, 0, 'only once');
+  });
+
   await t.test('imports todos created on the server', async () => {
     const uid = 'remote-' + Date.now();
     await client.put(calUrl + uid + '.ics', buildTodo({ uid, model: { title: 'From phone', done: false, due: null, priority: 9 } }), { create: true });
     const r = await engine.run();
     assert.equal(r.imported, 1);
+    assert.deepEqual(r.importedNotes, ['Inbox.md'], 'so the app can offer to open it');
     assert.match(read('Inbox.md'), /- \[ \] From phone #task 🔽 \^t[a-z0-9]{7}/);
     assert.ok((await byTitle('From phone')).tickmarkId);
   });

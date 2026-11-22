@@ -57,9 +57,11 @@ const S = {
 const tagOpts = () => ({ itemTags: S.config?.itemTags || ['task'], sectionTags: S.config?.sectionTags || ['sync'] });
 const syncConfigured = () => !!S.config?.accounts?.some((a) => a.url && a.calendarUrl);
 
+/** A short notice; `action` is { label, run } or a list of them (shown as buttons). */
 function toast(msg, action) {
-  el.toast.innerHTML = esc(msg) + (action ? ` <button>${esc(action.label)}</button>` : '');
-  if (action) el.toast.querySelector('button').onclick = () => { el.toast.classList.remove('show'); action.run(); };
+  const actions = action ? [].concat(action) : [];
+  el.toast.innerHTML = esc(msg) + actions.map((a) => ` <button>${esc(a.label)}</button>`).join('');
+  el.toast.querySelectorAll('button').forEach((b, i) => (b.onclick = () => { el.toast.classList.remove('show'); actions[i].run(); }));
   el.toast.classList.add('show');
   clearTimeout(toast.t);
   toast.t = setTimeout(() => el.toast.classList.remove('show'), action ? 7000 : 3200);
@@ -971,7 +973,7 @@ async function runSync({ manual = false, force = false } = {}) {
   if (!r.ok) {
     if (r.needsForce) toast(r.error, { label: 'Sync anyway', run: () => runSync({ manual: true, force: true }) });
     else if (manual) toast(r.error);
-  } else if (manual && !trashedCount(r.result)) { // recoverable deletions get their own notice
+  } else if (manual && !trashedCount(r.result) && !r.result.imported) { // new and deleted tasks get their own notice
     const x = r.result;
     const n = x.created + x.pushed + x.pulled + x.imported + x.deletedLocal + x.deletedRemote;
     toast(n ? `Synced: ${x.created + x.pushed} sent, ${x.pulled + x.imported} received${x.deletedLocal + x.deletedRemote ? `, ${x.deletedLocal + x.deletedRemote} deleted` : ''}` : 'Everything is up to date');
@@ -1337,14 +1339,32 @@ const SOURCE = { notes: 'removed from your notes', remote: 'deleted in a task ap
 
 /** Tasks a sync put in Deleted tasks. Removing a tag deletes the todo but keeps the line, so it isn't counted. */
 const trashedCount = (r) => (r ? r.trashed ?? r.deletedLocal + r.deletedRemote : 0);
-/** After any sync (this device's, another's, or the server's timer) that deleted tasks, offer a way back. */
+/**
+ * After any sync (this device's, another's, or the server's timer) that brought in new tasks or
+ * deleted some, say so, with a way to look: open the note they arrived in, or Deleted tasks.
+ */
 function noticeDeletions(st) {
   const r = st.lastResult;
-  const n = trashedCount(r);
-  if (!n || !st.lastRun || st.lastRun === S.deletionsNoticed) return;
+  const gone = trashedCount(r), added = r?.imported || 0;
+  if ((!gone && !added) || !st.lastRun || st.lastRun === S.deletionsNoticed) return;
   S.deletionsNoticed = st.lastRun;
   if (Date.now() - new Date(st.lastRun) > 60000) return; // an old result replayed on connect
-  toast(`${n} synced task${n === 1 ? ' was' : 's were'} deleted`, { label: 'Review', run: () => openDeleted() });
+  const notes = r.importedNotes || [];
+  const parts = [], actions = [];
+  if (added) {
+    parts.push(`${added} new task${added === 1 ? '' : 's'}${notes.length === 1 ? ` in ${basename(notes[0])}` : ''}`);
+    if (notes.length) actions.push({ label: gone ? 'Review new' : 'Review', run: () => openNewTasks(notes) });
+  }
+  if (gone) {
+    parts.push(`${gone} synced task${gone === 1 ? ' was' : 's were'} deleted`);
+    actions.push({ label: added ? 'Review deleted' : 'Review', run: () => openDeleted() });
+  }
+  toast(parts.join(' · '), actions);
+}
+/** Open the note new tasks arrived in (a menu to pick one if they went to several). */
+function openNewTasks(notes) {
+  if (notes.length === 1) return open(notes[0]);
+  showMenu(el.sync, notes.map((p) => ({ label: basename(p), run: () => open(p) })));
 }
 
 const delDlg = $('#dlg-deleted');

@@ -47,7 +47,7 @@ export function accountFor(task, accounts) {
 
 /** Heading for restored tasks whose own heading no longer exists. */
 const RESTORED = 'Restored tasks';
-const emptyResult = () => ({ pushed: 0, pulled: 0, created: 0, imported: 0, deletedRemote: 0, deletedLocal: 0, trashed: 0, errors: [] });
+const emptyResult = () => ({ pushed: 0, pulled: 0, created: 0, imported: 0, deletedRemote: 0, deletedLocal: 0, trashed: 0, errors: [], importedNotes: [] });
 const COUNTS = ['pushed', 'pulled', 'created', 'imported', 'deletedRemote', 'deletedLocal', 'trashed'];
 
 export class SyncEngine {
@@ -155,6 +155,7 @@ export class SyncEngine {
       Object.assign(entry, r);
       total.accounts.push(entry);
       for (const k of COUNTS) total[k] += r[k];
+      total.importedNotes = [...new Set([...total.importedNotes, ...r.importedNotes])];
       total.errors.push(...r.errors.map((x) => (accounts.length > 1 ? `${a.name}: ${x}` : x)));
     }
     this.index.pruneDeleted();
@@ -316,8 +317,9 @@ export class SyncEngine {
             if (a) { m = a.open; history = a.historyLine; }
           }
           let etag = R.etag;
-          if (!modelsEqual(m, R.model) || R.tickmarkId !== bid) {
-            const ics = buildTodo({ existing: R.ics, uid: R.uid, model: m, tickmarkId: bid, doneDate: L.task.doneDate });
+          const moved = R.fromNote && R.fromNote !== L.path; // the note was renamed or moved
+          if (!modelsEqual(m, R.model) || R.tickmarkId !== bid || moved) {
+            const ics = buildTodo({ existing: R.ics, uid: R.uid, model: m, tickmarkId: bid, doneDate: L.task.doneDate, fromNote: moved ? L.path : null });
             etag = (await client.put(R.url, ics, { etag: R.etag })).etag;
             if (!modelsEqual(m, R.model)) result.pushed++;
           }
@@ -401,6 +403,7 @@ export class SyncEngine {
             appends.push(op.line);
             applied.push(op);
             result.imported++;
+            if (!result.importedNotes.includes(path)) result.importedNotes.push(path);
             continue;
           }
           const t = tasks.get(op.bid);
