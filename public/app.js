@@ -132,7 +132,11 @@ marked.use({
         const m = /^!?\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/.exec(src);
         if (m) return { type: 'wikilink', raw: m[0], target: m[1].trim(), label: (m[2] || m[1]).trim() };
       },
-      renderer(t) { return `<a href="#" class="wikilink" data-target="${esc(t.target)}">${esc(t.label)}</a>`; },
+      renderer(t) {
+        // ![[Note]] (or ![[Note#Heading]]) shows that note inside this one; filled in after rendering.
+        if (t.raw.startsWith('!')) return `<span class="embed" data-target="${esc(t.target)}"></span>`;
+        return `<a href="#" class="wikilink" data-target="${esc(t.target)}">${esc(t.label)}</a>`;
+      },
     },
     {
       name: 'tag', level: 'inline',
@@ -175,6 +179,23 @@ marked.use({
   ],
 });
 
+/** Markdown only knows [ ] and [x]: draw "[/] …" (in progress) and "[-] …" (cancelled) items as checkboxes too. */
+function drawStates(root) {
+  root.querySelectorAll('li').forEach((li) => {
+    const host = li.firstChild?.nodeName === 'P' ? li.firstChild : li;
+    const t = host.firstChild;
+    const m = t?.nodeType === 3 && /^\[([/-])\]\s/.exec(t.textContent);
+    if (!m) return;
+    t.textContent = t.textContent.slice(m[0].length);
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'task-cb';
+    cb.dataset.state = m[1] === '/' ? 'progress' : 'cancelled';
+    if (m[1] === '-') cb.checked = true;
+    host.insertBefore(cb, host.firstChild);
+  });
+}
+
 const SYNC_ICON = '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>';
 
 function renderPreview() {
@@ -190,19 +211,7 @@ function renderPreview() {
   el.preview.innerHTML = head + marked.parse(body);
   // Markdown only knows [ ] and [x]: turn "[/] …" and "[-] …" list items into checkboxes too, then
   // number every checkbox in document order (the order checkboxLines() lists their source lines).
-  el.preview.querySelectorAll('li').forEach((li) => {
-    const host = li.firstChild?.nodeName === 'P' ? li.firstChild : li;
-    const t = host.firstChild;
-    const m = t?.nodeType === 3 && /^\[([/-])\]\s/.exec(t.textContent);
-    if (!m) return;
-    t.textContent = t.textContent.slice(m[0].length);
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.className = 'task-cb';
-    cb.dataset.state = m[1] === '/' ? 'progress' : 'cancelled';
-    if (m[1] === '-') cb.checked = true;
-    host.insertBefore(cb, host.firstChild);
-  });
+  drawStates(el.preview);
   el.preview.querySelectorAll('input.task-cb').forEach((cb, i) => (cb.dataset.i = i));
 
   const lines = checkboxLines(text);
@@ -231,6 +240,61 @@ function renderPreview() {
   });
   el.preview.querySelectorAll('a.wikilink').forEach((a) => { if (!resolveLink(a.dataset.target)) a.classList.add('missing'); });
   applyFolds(true);
+  fillEmbeds(el.preview, [S.path]);
+}
+
+// ---- embedded notes: ![[Note]] and ![[Note#Heading]], read-only, up to three levels deep
+const embedCache = new Map(); // path → { mtime, content }
+async function embedText(path) {
+  const mtime = S.files.find((f) => f.path === path)?.mtime;
+  const hit = embedCache.get(path);
+  if (hit && hit.mtime === mtime) return hit.content;
+  const f = await api('GET', `/api/file?path=${enc(path)}`);
+  embedCache.set(path, { mtime, content: f.content });
+  return f.content;
+}
+/** The part of a note under a heading (to the next heading of the same or a higher level). */
+function sectionOf(text, heading) {
+  const lines = text.split('\n');
+  const want = heading.trim().toLowerCase();
+  let start = -1, level = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const h = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(lines[i]);
+    if (!h) continue;
+    if (start >= 0 && h[1].length <= level) return lines.slice(start, i).join('\n');
+    if (start < 0 && h[2].replace(/(^|\s)#[\p{L}\p{N}_/-]+/gu, '').trim().toLowerCase() === want) { start = i; level = h[1].length; }
+  }
+  return start >= 0 ? lines.slice(start).join('\n') : null;
+}
+async function fillEmbeds(root, chain) {
+  const path0 = S.path;
+  for (const box of root.querySelectorAll('span.embed:not([data-done])')) {
+    box.dataset.done = '1';
+    const [name, heading] = box.dataset.target.split('#');
+    const f = resolveLink(name);
+    const title = `${f ? basename(f.path) : name}${heading ? ' › ' + heading : ''}`;
+    box.innerHTML = `<a href="#" class="embed-title wikilink" data-target="${esc(box.dataset.target)}">${esc(title)}</a><span class="embed-body"></span>`;
+    const body = box.querySelector('.embed-body');
+    if (!f) { box.classList.add('missing'); body.textContent = 'No such note yet.'; continue; }
+    if (chain.includes(f.path) || chain.length > 3) { body.textContent = chain.includes(f.path) ? 'Embeds itself, so it isn\'t shown here.' : 'Nested too deep to show.'; continue; }
+    try {
+      let text = (await embedText(f.path)).replace(/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, '');
+      if (heading) text = sectionOf(text, heading) ?? `*No heading “${heading}” in ${basename(f.path)}.*`;
+      if (S.path !== path0) return; // moved on to another note meanwhile
+      const save = cbIndex;
+      body.innerHTML = marked.parse(text);
+      cbIndex = save;
+      // Checkboxes in an embed belong to the other note: read-only here.
+      drawStates(body);
+      body.querySelectorAll('input[type=checkbox]').forEach((cb) => {
+        cb.disabled = true; cb.classList.remove('task-cb'); cb.classList.add('embed-cb');
+        if (cb.dataset.state === 'progress') cb.indeterminate = true;
+        if (cb.dataset.state === 'cancelled') cb.closest('li')?.classList.add('cancelled-item');
+      });
+      body.querySelectorAll('a.wikilink').forEach((a) => { if (!resolveLink(a.dataset.target)) a.classList.add('missing'); });
+      await fillEmbeds(body, [...chain, f.path]);
+    } catch (e) { body.textContent = `Couldn't load it: ${e.message}`; }
+  }
 }
 
 // ---- collapsible headings in the preview (remembered per note, on this device)

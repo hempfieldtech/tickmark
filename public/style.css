@@ -432,3 +432,15 @@ details.card[open] summary { margin-bottom: 4px; }
 .suggest button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: 5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
 .suggest button[aria-selected="true"], .suggest button:hover { background: var(--accent-soft); color: var(--accent); }
 .suggest .dir { color: var(--muted); font-size: 12px; margin-left: 6px; }
+
+/* Embedded notes: ![[Note]] */
+.md .embed { display: block; margin: .6em 0; padding: 4px 14px 2px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); border-radius: 0 6px 6px 0; }
+.md .embed-title { display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); text-decoration: none; margin: 4px 0 2px; }
+.md .embed-title:hover { color: var(--accent); }
+.md .embed-body { display: block; }
+.md .embed.missing .embed-body { color: var(--muted); font-style: italic; padding-bottom: 6px; }
+.embed-cb { appearance: none; width: 16px; height: 16px; margin: 0 8px 0 0; vertical-align: -2px; border: 1.5px solid var(--muted); border-radius: 4px; display: inline-grid; place-content: center; opacity: .8; }
+.embed-cb:checked { background: var(--muted); border-color: var(--muted); }
+.md li:has(> .embed-cb), .md li:has(> p > .embed-cb) { list-style: none; }
+.md ul:has(> li > .embed-cb) { padding-left: .2em; }
+.embed-cb:indeterminate { background: linear-gradient(to right, var(--muted) 50%, transparent 50%); }
