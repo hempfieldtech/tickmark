@@ -1,0 +1,104 @@
+# Test, then build and push the Docker image to GitHub Container Registry (ghcr.io/<owner>/tickmark).
+#
+#   push to master     → :latest and :sha-<short>
+#   tag v1.2.3         → :1.2.3, :1.2 and :latest
+#   pull request       → test and build only, nothing pushed
+#   Actions tab        → "Run workflow" to do it by hand
+#
+# ── Registry login (the "API token") ─────────────────────────────────────────────────────────────
+# Nothing to add by default: the job logs in with GitHub's built-in GITHUB_TOKEN, which the
+# `packages: write` permission below lets it push with.
+#
+# If the push fails with "denied" / "permission_denied" (the package was first pushed by hand with a
+# personal token, so this repo isn't allowed to write to it yet), do ONE of these:
+#   a) Recommended: github.com → your profile → Packages → tickmark → Package settings →
+#      "Manage Actions access" → Add repository → tickmark, role "Write". No token needed.
+#   b) Use a personal access token instead: repo → Settings → Secrets and variables → Actions →
+#      New repository secret, name  GHCR_TOKEN , value a classic PAT with the write:packages scope.
+#      (Optional: on the Variables tab add GHCR_USERNAME = the token owner's GitHub user name.)
+#      The login step below picks GHCR_TOKEN up automatically when it exists.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+name: Docker image
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/tickmark
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # A throwaway CalDAV server so the end-to-end sync tests run too.
+      - name: Start Radicale
+        run: |
+          pip install --quiet radicale
+          printf '[server]\nhosts = 127.0.0.1:5232\n[auth]\ntype = none\n[storage]\nfilesystem_folder = %s\n' "$RUNNER_TEMP/radicale" > "$RUNNER_TEMP/radicale.conf"
+          python -m radicale --config "$RUNNER_TEMP/radicale.conf" &
+          for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:5232/ && break; sleep 1; done
+      - name: Tests
+        run: node --test test/
+        env:
+          CALDAV_TEST_URL: http://127.0.0.1:5232/
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          # ← GHCR_USERNAME (Actions variable) and GHCR_TOKEN (Actions secret) are optional; see the top of this file.
+          username: ${{ vars.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
