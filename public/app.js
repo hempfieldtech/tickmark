@@ -1039,6 +1039,7 @@ $('#btn-more').onclick = (e) => {
       { label: 'Rename', run: () => { el.title.focus(); el.title.select(); } },
     ] : []),
     ...(note ? [{ label: 'Share…', run: () => openShare(S.path, false) }] : []),
+    ...(note ? [{ label: 'History…', run: () => openHistory() }] : []),
     ...(note ? [{ label: 'Apply template…', run: () => applyTemplateMenu() }] : []),
     ...(note && !isTemplate(S.path) ? [{ label: 'Save as template…', run: () => saveAsTemplate() }] : []),
     { label: 'Sync now', run: () => runSync({ manual: true }) },
@@ -1382,6 +1383,52 @@ async function loadReadme() {
   } catch (e) { box.innerHTML = `<p class="note err">${esc(e.message)}</p>`; }
 }
 const slug = (t) => t.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-');
+
+// ---- note history (git on the server)
+const histDlg = $('#dlg-history');
+const hist = { path: null, hash: null };
+async function openHistory() {
+  await flushSave();
+  hist.path = S.path; hist.hash = null;
+  $('#history-title').textContent = `History of “${basename(S.path)}”`;
+  $('#history-list').innerHTML = '<li class="note">Loading…</li>';
+  $('#history-diff').innerHTML = '';
+  $('#history-what').textContent = 'Pick a version to see what has changed since.';
+  $('#btn-history-restore').disabled = true;
+  if (!histDlg.open) histDlg.showModal();
+  let r;
+  try { r = await api('GET', `/api/history?path=${enc(hist.path)}`); } catch (e) { $('#history-list').innerHTML = `<li class="note err">${esc(e.message)}</li>`; return; }
+  if (!r.available) { $('#history-list').innerHTML = '<li class="note">History needs git on the server (the Docker image has it).</li>'; return; }
+  if (!r.versions.length) { $('#history-list').innerHTML = '<li class="note">No versions yet. Changes are recorded about 30 seconds after you stop editing.</li>'; return; }
+  $('#history-list').innerHTML = r.versions.map((v, i) => {
+    const d = new Date(v.date);
+    return `<li><button type="button" role="option" data-hash="${esc(v.hash)}" aria-selected="false">` +
+      `<span class="when">${esc(d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }))}</span>` +
+      `<span class="ago">${i === 0 ? 'latest · ' : ''}${esc(relTime(v.date))}</span></button></li>`;
+  }).join('');
+}
+$('#history-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-hash]');
+  if (!b) return;
+  $('#history-list').querySelectorAll('button').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+  hist.hash = b.dataset.hash;
+  let r;
+  try { r = await api('GET', `/api/history/version?path=${enc(hist.path)}&hash=${enc(hist.hash)}`); } catch (err) { toast(err.message); return; }
+  const changes = r.diff.filter((d) => d.type === '+' || d.type === '-').length;
+  $('#history-what').textContent = changes ? 'Red: in this version, gone now. Green: added since.' : 'Same as the note now.';
+  $('#btn-history-restore').disabled = !changes;
+  $('#history-diff').innerHTML = changes ? r.diff.map((d) => d.type === '…' ? '<div class="gap">⋯</div>'
+    : `<div class="${d.type === '+' ? 'add' : d.type === '-' ? 'del' : ''}">${esc(d.type === ' ' ? '  ' : d.type + ' ')}${esc(d.line) || ' '}</div>`).join('') : '';
+});
+$('#btn-history-restore').onclick = async () => {
+  if (!hist.hash || !confirm('Put the note back the way it was in this version? The current text stays in its history.')) return;
+  try {
+    const r = await api('POST', '/api/history/restore', { path: hist.path, hash: hist.hash });
+    histDlg.close();
+    if (S.path === hist.path) { S.base = r.content; S.hash = r.hash; setEditorText(r.content); renderPreview(); S.savedAt = Date.now(); updateSaveState(); }
+    toast('Restored that version');
+  } catch (e) { toast(e.message); }
+};
 
 // ---- note templates: notes in the Templates folder (their checklist items never sync)
 const TEMPLATES = 'Templates';

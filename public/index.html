@@ -312,6 +312,22 @@
     <ul id="switcher-list"></ul>
   </dialog>
 
+  <dialog id="dlg-history" class="dlg history-dlg" aria-labelledby="history-title">
+    <header class="set-head">
+      <h3 id="history-title">History</h3>
+      <button type="button" class="icon-btn" data-close aria-label="Close" title="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="history-body">
+      <ul id="history-list" class="history-list" role="listbox" aria-label="Versions"></ul>
+      <div class="history-view">
+        <div class="row between history-bar"><span class="note" id="history-what">Pick a version to see what changed since.</span>
+          <button type="button" id="btn-history-restore" class="btn primary" disabled>Restore this version</button></div>
+        <pre id="history-diff" class="history-diff"></pre>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="dlg-share" class="dlg small share-dlg" aria-labelledby="share-title">
     <header class="set-head">
       <h3 id="share-title">Share</h3>

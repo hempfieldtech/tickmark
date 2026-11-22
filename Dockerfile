@@ -12,8 +12,8 @@ ENV NODE_ENV=production \
     TICKMARK_DATA=/data \
     NODE_NO_WARNINGS=1
 
-# tzdata so TZ=... works for due dates/times sent to and read from CalDAV
-RUN apk add --no-cache tzdata
+# tzdata so TZ=... works for due dates/times sent to and read from CalDAV; git for note history
+RUN apk add --no-cache tzdata git
 
 WORKDIR /app
 COPY package.json README.md ./

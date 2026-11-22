@@ -602,3 +602,39 @@ test('public links share a note or folder, read-only, only with a domain-based p
     assert.deepEqual((await call('GET', '/api/shares')).data.shares, []);
   } finally { await srv.stop(); }
 });
+
+test('note history: versions, differences and restore (git)', async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault'), TICKMARK_HISTORY_DELAY_MS: '100' });
+  const c = client(srv.base);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    await c.call('POST', '/api/file', { path: 'Diary.md', content: 'one\ntwo\nthree\n' });
+    await wait(400);
+    await c.call('PUT', '/api/file?path=Diary.md', { content: 'one\n2\nthree\nfour\n' });
+    fs.mkdirSync(path.join(dir, 'vault', '.trash'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'vault', '.trash', 'Old.md'), 'trashed');
+    let h = (await c.call('GET', '/api/history?path=Diary.md')).data; // commits pending changes first
+    assert.equal(h.available, true);
+    assert.equal(h.versions.length, 2);
+    const first = h.versions[1].hash;
+    const v = (await c.call('GET', `/api/history/version?path=Diary.md&hash=${first}`)).data;
+    assert.equal(v.content, 'one\ntwo\nthree\n');
+    assert.deepEqual(v.diff.map((d) => d.type + d.line), [' one', '-two', '+2', ' three', '+four', ' ']);
+    // History follows a rename.
+    await c.call('POST', '/api/rename', { from: 'Diary.md', to: 'Journal/Diary 2026.md' });
+    h = (await c.call('GET', '/api/history?path=Journal%2FDiary%202026.md')).data;
+    assert.equal(h.versions.length, 3);
+    assert.equal((await c.call('GET', `/api/history/version?path=Journal%2FDiary%202026.md&hash=${first}`)).data.content, 'one\ntwo\nthree\n');
+    // Restore brings the old text back (and is itself a new version).
+    const r = await c.call('POST', '/api/history/restore', { path: 'Journal/Diary 2026.md', hash: first });
+    assert.equal(r.status, 200);
+    assert.equal(fs.readFileSync(path.join(dir, 'vault', 'Journal', 'Diary 2026.md'), 'utf8'), 'one\ntwo\nthree\n');
+    assert.equal((await c.call('GET', '/api/history?path=Journal%2FDiary%202026.md')).data.versions.length, 4);
+    // Only notes are kept: nothing from .trash, and the vault itself has no .git.
+    const files = execFileSync('git', [`--git-dir=${path.join(dir, 'data', 'history.git')}`, 'ls-files'], { cwd: path.join(dir, 'vault') }).toString();
+    assert.equal(files.trim(), 'Journal/Diary 2026.md');
+    assert.equal(fs.existsSync(path.join(dir, 'vault', '.git')), false);
+    assert.equal((await c.call('GET', `/api/history/version?path=Journal%2FDiary%202026.md&hash=nothex`)).status, 400);
+  } finally { await srv.stop(); }
+});

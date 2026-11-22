@@ -26,6 +26,7 @@ import { settingsCipher } from './secrets.js';
 import { ServerSettings, SSO_FIELDS } from './server-settings.js';
 import { Branding } from './branding.js';
 import { Shares, shareBlocker } from './shares.js';
+import { lineDiff } from './history.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = path.resolve(process.env.TICKMARK_DATA || path.join(ROOT, 'data'));
@@ -288,6 +289,25 @@ const routes = {
     const updated = ws.rename(String(body.from), String(body.to));
     shares.moved(owner(user), String(body.from), String(body.to));
     return { ok: true, updated };
+  },
+  // ---- version history of a note (git, in the data folder)
+  'GET /api/history': async ({ ws }, q) => {
+    const versions = await ws.history.versions(String(q.get('path') || ''));
+    return versions ? { available: true, versions } : { available: false, versions: [] };
+  },
+  'GET /api/history/version': async ({ ws }, q) => {
+    const rel = String(q.get('path') || '');
+    const old = await ws.history.contentAt(rel, String(q.get('hash') || ''));
+    let now = '';
+    try { now = ws.vault.read(rel).content; } catch {}
+    return { content: old, diff: lineDiff(old, now) };
+  },
+  'POST /api/history/restore': async ({ ws }, q, body) => {
+    const rel = String(body.path || '');
+    const old = await ws.history.contentAt(rel, String(body.hash || ''));
+    const r = ws.vault.save(rel, old);
+    await ws.history.commit();
+    return { ok: true, hash: r.hash, content: old };
   },
   // ---- the README, for Settings → Help
   'GET /api/readme': () => {

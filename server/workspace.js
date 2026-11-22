@@ -8,6 +8,7 @@ import { Index } from './db.js';
 import { Config } from './config.js';
 import { SyncEngine } from './sync.js';
 import { movedNotes, rewriteLinks } from './links.js';
+import { History } from './history.js';
 
 /** How long after a file changes outside Tickmark to sync it (editors often write in several steps). */
 const EXTERNAL_SYNC_DELAY = Number(process.env.TICKMARK_EXTERNAL_SYNC_MS) || 3000;
@@ -23,8 +24,10 @@ export class Workspace {
     this.index.migrateLegacyStates(this.config.get().accounts[0]?.id);
     this.index.setTagOptions(this.config.allTags());
 
+    this.history = new History({ dataDir, vaultDir, log: (...a) => console.warn(name ? `[${name}]` : '', ...a) });
     this.vault = new Vault(vaultDir, {
       onWrite: (rel, content) => {
+        this.history.changed();
         if (rel && content != null) {
           if (this.index.indexFile(rel, content)) this.broadcast('file', { path: rel, hash: this.hashOf(rel) });
         } else this.scheduleScan();
@@ -51,6 +54,7 @@ export class Workspace {
     });
     this.serverTimer = null;
     this.scheduleServerSync();
+    this.history.changed(); // record the vault as it is at start (edits made while Tickmark was off)
   }
 
   hashOf(rel) { return this.index.db.prepare('SELECT hash FROM files WHERE path=?').get(rel)?.hash; }
@@ -67,6 +71,7 @@ export class Workspace {
       for (const p of changed) this.broadcast('file', { path: p, hash: this.hashOf(p) });
       if (changed.length || removed.length) {
         this.broadcast('tree', {});
+        this.history.changed();
         // In-app saves are indexed as they're written, so anything the scan finds was changed outside
         // Tickmark (another editor, a file sync tool): sync it too, rather than waiting for the next save.
         this.scheduleExternalSync();
@@ -77,6 +82,7 @@ export class Workspace {
   scheduleExternalSync(ms = EXTERNAL_SYNC_DELAY) {
     if (!this.config.get().accounts.some((a) => a.url && a.calendarUrl)) return;
     clearTimeout(this.externalSyncTimer);
+    this.history.close();
     this.externalSyncTimer = setTimeout(() => {
       // A sync already under way may have read the files before this change: go again once it's done.
       if (this.sync.running) return this.sync.running.catch(() => {}).finally(() => this.scheduleExternalSync(500));
