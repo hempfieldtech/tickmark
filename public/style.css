@@ -1,4 +1,4 @@
-:root {
+:root, [data-theme="light"] {
   --bg: #f7f6f3;
   --panel: #efede8;
   --surface: #ffffff;
@@ -16,23 +16,62 @@
   --sans: system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
   color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1b1d21;
-    --panel: #16181b;
-    --surface: #202227;
-    --line: #2f3238;
-    --text: #e3e4e6;
-    --muted: #8f939b;
-    --accent: #5fbfa8;
-    --accent-soft: #1f3a34;
-    --danger: #e0766d;
-    --warn: #e0b04f;
-    --mark: #5a4b16;
-    --code-bg: #26292e;
-    color-scheme: dark;
-  }
+/* ---------- themes ----------
+   public/theme.js sets data-theme on <html> ("system" resolves to light or dark). The selectors
+   aren't tied to :root so the swatches in Settings → Appearance can preview any theme. */
+[data-theme="dark"] {
+  --bg: #1b1d21; --panel: #16181b; --surface: #202227; --line: #2f3238;
+  --text: #e3e4e6; --muted: #8f939b; --accent: #5fbfa8; --accent-soft: #1f3a34;
+  --danger: #e0766d; --warn: #e0b04f; --mark: #5a4b16; --code-bg: #26292e;
+  color-scheme: dark;
 }
+[data-theme="sepia"] {
+  --bg: #f4ecd8; --panel: #ebe1c8; --surface: #fbf5e6; --line: #dacdac;
+  --text: #433422; --muted: #7a6a52; --accent: #9c4f24; --accent-soft: #f0dcc6;
+  --danger: #b23c2a; --warn: #93650a; --mark: #f1d77c; --code-bg: #ece1c6;
+  color-scheme: light;
+}
+[data-theme="solarized-light"] {
+  --bg: #fdf6e3; --panel: #eee8d5; --surface: #fffbef; --line: #e0d8bf;
+  --text: #36474d; --muted: #657b83; --accent: #1f78b8; --accent-soft: #dcebf3;
+  --danger: #c7302d; --warn: #9a7400; --mark: #f5e3a3; --code-bg: #f1ebd8;
+  color-scheme: light;
+}
+[data-theme="solarized-dark"] {
+  --bg: #002b36; --panel: #00232c; --surface: #073642; --line: #0f4655;
+  --text: #cdd6d6; --muted: #8a9a9b; --accent: #35b3a9; --accent-soft: #0b4a4a;
+  --danger: #ec6a66; --warn: #d0a21c; --mark: #4d4200; --code-bg: #0a3a46;
+  color-scheme: dark;
+}
+[data-theme="nord"] {
+  --bg: #2e3440; --panel: #292e39; --surface: #3b4252; --line: #4a5367;
+  --text: #eceff4; --muted: #a3acbd; --accent: #88c0d0; --accent-soft: #3a4e5d;
+  --danger: #d58088; --warn: #ebcb8b; --mark: #5e5135; --code-bg: #353c4a;
+  color-scheme: dark;
+}
+[data-theme="midnight"] {
+  --bg: #000000; --panel: #0a0a0b; --surface: #111214; --line: #25272c;
+  --text: #e6e6e6; --muted: #8a8d93; --accent: #8ab4f8; --accent-soft: #19293f;
+  --danger: #f28b82; --warn: #fdd663; --mark: #4a3f10; --code-bg: #17181b;
+  color-scheme: dark;
+}
+[data-theme="terminal"] {
+  --bg: #050a05; --panel: #030703; --surface: #0a120a; --line: #1d3a1d;
+  --text: #4cff6a; --muted: #2fa344; --accent: #9dff9d; --accent-soft: #123312;
+  --danger: #ff5f4a; --warn: #ffd23f; --mark: #2a5a12; --code-bg: #0d1a0d;
+  --radius: 0;
+  --sans: var(--mono);
+  color-scheme: dark;
+}
+/* Terminal: square everything, solid block selection, faint scanlines over the page. */
+:root[data-theme="terminal"] *, :root[data-theme="terminal"] *::before, :root[data-theme="terminal"] *::after { border-radius: 0 !important; }
+:root[data-theme="terminal"] ::selection { background: var(--text); color: var(--bg); }
+:root[data-theme="terminal"] textarea, :root[data-theme="terminal"] input { caret-color: var(--accent); }
+:root[data-theme="terminal"] body::after {
+  content: ""; position: fixed; inset: 0; z-index: 1000; pointer-events: none;
+  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgb(0 0 0 / .18) 2px 3px);
+}
+@media print { :root[data-theme="terminal"] body::after { display: none; } }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -292,3 +331,20 @@ details.card[open] summary { margin-bottom: 4px; }
   #crumbs { display: none; }
   #topbar { padding: 6px 8px; gap: 4px; }
 }
+
+/* ---------- appearance: theme picker ---------- */
+.themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.theme-opt { display: grid; gap: 6px; padding: 6px; border: 2px solid transparent; border-radius: 10px; background: none; text-align: left; }
+.theme-opt:hover { border-color: var(--line); }
+.theme-opt[aria-checked="true"] { border-color: var(--accent); }
+.theme-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-name { font-size: 13px; padding: 0 2px; }
+.theme-opt[aria-checked="true"] .theme-name { color: var(--accent); font-weight: 600; }
+.sw-wrap { display: flex; height: 76px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.sw { flex: 1; display: flex; background: var(--bg); color: var(--text); font-family: var(--sans); }
+.sw-side { width: 26%; background: var(--panel); border-right: 1px solid var(--line); }
+.sw-main { flex: 1; position: relative; display: grid; align-content: start; gap: 6px; padding: 12px 10px; }
+.sw-line { height: 5px; border-radius: 3px; background: var(--text); opacity: .8; }
+.sw-line.short { width: 60%; background: var(--muted); }
+.sw-dot { position: absolute; right: 10px; bottom: 10px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); }
+.sw[data-theme="terminal"] { background: repeating-linear-gradient(to bottom, var(--bg) 0 2px, #000 2px 3px); }

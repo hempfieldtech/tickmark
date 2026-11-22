@@ -757,6 +757,7 @@ $('#btn-more').onclick = (e) => {
     ] : []),
     { label: 'Sync now', run: () => runSync({ manual: true }) },
     { label: 'Deleted tasks…', run: openDeleted },
+    { label: 'Theme…', run: () => openSettings('appearance') },
     ...(note ? [{ label: 'Move to trash', danger: true, run: () => trashPath(S.path, false) }] : []),
   ]);
 };
@@ -948,7 +949,7 @@ async function discover(box) {
 
 // The settings pane: a menu of sections. CalDAV accounts and Sync share one form and Save button;
 // the others act immediately (account, users) or have their own Save (single sign-on).
-const SECTIONS = { caldav: 'CalDAV accounts', sync: 'Sync', account: 'Your account', users: 'Users', sso: 'Single sign-on' };
+const SECTIONS = { caldav: 'CalDAV accounts', sync: 'Sync', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance' };
 const setDlg = $('#dlg-settings');
 const isMulti = () => S.me?.mode === 'multi' && !!S.me.user;
 const isAdmin = () => isMulti() && !!S.me.user.admin;
@@ -974,6 +975,7 @@ function showSection(sec) {
   setDlg.querySelectorAll('.set-main > [data-sec]').forEach((x) => (x.hidden = x.dataset.sec !== sec));
   if (sec === 'users') loadUsers();
   if (sec === 'sso') loadSso();
+  if (sec === 'appearance') renderThemes();
 }
 setDlg.querySelectorAll('.set-nav [data-sec]').forEach((b) => (b.onclick = () => showSection(b.dataset.sec)));
 setDlg.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { e.preventDefault(); showSection(g.dataset.goto); } });
@@ -992,6 +994,31 @@ function openSettings(sec) {
   setDlg.querySelector('.set-nav .active')?.focus({ focusVisible: false });
 }
 $('#btn-settings').onclick = () => openSettings();
+
+// ---------------------------------------------------------------- appearance
+const THEMES = [
+  ['system', 'System', 'Light or dark, following your device'],
+  ['light', 'Light'], ['dark', 'Dark'], ['sepia', 'Sepia'],
+  ['solarized-light', 'Solarized Light'], ['solarized-dark', 'Solarized Dark'],
+  ['nord', 'Nord'], ['midnight', 'Midnight', 'Pure black, for OLED screens'],
+  ['terminal', 'Terminal', 'Green phosphor console'],
+];
+const swatch = (t) => `<span class="sw" data-theme="${t}"><span class="sw-side"></span><span class="sw-main">` +
+  `<span class="sw-line"></span><span class="sw-line short"></span><span class="sw-dot"></span></span></span>`;
+function renderThemes() {
+  const cur = window.tickmarkTheme?.get() || 'system';
+  $('#themes').innerHTML = THEMES.map(([id, name, hint]) =>
+    `<button type="button" role="radio" class="theme-opt" data-id="${id}" aria-checked="${id === cur}"${hint ? ` title="${esc(hint)}"` : ''}>` +
+    `<span class="sw-wrap">${id === 'system' ? swatch('light') + swatch('dark') : swatch(id)}</span>` +
+    `<span class="theme-name">${esc(name)}</span></button>`).join('');
+}
+$('#themes').addEventListener('click', (e) => {
+  const b = e.target.closest('.theme-opt');
+  if (!b) return;
+  window.tickmarkTheme?.set(b.dataset.id);
+  renderThemes();
+  $(`#themes .theme-opt[data-id="${b.dataset.id}"]`)?.focus();
+});
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();

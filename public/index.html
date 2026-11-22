@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tickmark</title>
-  <meta name="theme-color" content="#f7f6f3" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#1b1d21" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f7f6f3">
+  <script src="/theme.js"></script>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
@@ -79,6 +79,7 @@
         <button type="button" data-sec="account">Your account</button>
         <button type="button" data-sec="users">Users</button>
         <button type="button" data-sec="sso">Single sign-on</button>
+        <button type="button" data-sec="appearance">Appearance</button>
       </nav>
       <div class="set-main">
         <header class="set-head">
@@ -106,6 +107,11 @@
           </section>
           <footer class="set-foot"><button class="btn primary">Save</button></footer>
         </form>
+
+        <section data-sec="appearance" class="set-body">
+          <p class="note">Theme for this device. It applies straight away.</p>
+          <div id="themes" class="themes" role="radiogroup" aria-label="Theme"></div>
+        </section>
 
         <section data-sec="account" class="set-body">
           <div class="row between">
