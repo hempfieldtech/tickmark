@@ -169,20 +169,22 @@ On first sync each synced line gets a block id such as `^t3k9x2ab`. That id link
 
 ## How sync works
 
-Sync runs on the server, since the server holds the files. The app triggers it a few seconds after you save, when the window regains focus, every *N* minutes while open (5 by default), and from the sync button. There's also an optional server-side timer.
+Sync runs on the server, since the server holds the files. The app triggers it a few seconds after you save (once you pause typing, so a task isn't sent half-written), when the window regains focus, every *N* minutes while open (5 by default), and from the sync button. Notes changed outside Tickmark (another editor, a file sync tool) are synced a few seconds after the change. There's also an optional server-side timer.
 
 - **Three-way, per field.** The last synced state of each task is stored. If a field changed on only one side, that change wins. If the same field changed on both sides, the note wins. Different fields merge, e.g. you rename the task in the note while your phone marks it done.
 - **Already done before it ever synced** (e.g. the completed copies recurring tasks leave behind): stays in the note, isn't uploaded.
-- **Created elsewhere → the account's inbox note** (`Inbox.md` by default), tagged so it keeps syncing. Old completed todos are not imported.
+- **Created elsewhere → the account's inbox note** (`Inbox.md` by default), tagged so it keeps syncing. Old completed todos are not imported. A todo whose description says `From note: Work/Plan.md` (as Tickmark writes them) goes back to that note instead, or to a new note of that name in the vault's root if it no longer exists.
 - **Deletes propagate** both ways, but only when the other side hasn't changed since the last sync. If it has, the surviving copy is recreated so nothing is lost. Removing the tag from a line counts as deleting it.
-- **Deleted tasks can be restored for 30 days.** The **⋯** menu (top right) → **Deleted tasks** lists synced tasks that sync deleted, whether the line was removed from a note or the todo was deleted in a task app, and after any sync that deletes something a notice offers **Review**. Each entry shows the note and the heading it was under, so two tasks with the same name are easy to tell apart. *Restore* puts the line back in its note, under that heading if it still exists (or in the inbox if the note is gone), and the todo back on the server, the exact copy where Tickmark kept one, so details other apps added survive. A line whose tag you removed, or that moved to another account, isn't counted as deleted. The list lives in the search index, so deleting `index.sqlite` empties it.
+- **Deleted tasks can be restored for 30 days.** The **⋯** menu (top right) → **Deleted tasks in this note** lists the open note's synced tasks that sync deleted (Settings → **Deleted tasks** lists every note's), whether the line was removed from a note or the todo was deleted in a task app, and after any sync that deletes something a notice offers **Review**. Each entry shows the note and the heading it was under, so two tasks with the same name are easy to tell apart. *Restore* puts the line back in its note, under that heading if it still exists (otherwise under a **Restored tasks** heading, in the inbox if the note is gone), and the todo back on the server, the exact copy where Tickmark kept one, so details other apps added survive. A line whose tag you removed, or that moved to another account, isn't counted as deleted and brings no notice. The list lives in the search index, so deleting `index.sqlite` empties it.
 - **Remote edits are patched, not replaced.** Properties other clients add (alarms, descriptions, timezones, X- props) are kept.
 - **Mass-deletion guard.** If more than half the tasks seem to have disappeared on one side (wrong calendar, server hiccup), sync stops and asks you to confirm with "Sync anyway".
 - **Editor vs. sync.** Saves send the version the editor started from. If the file changed on disk meanwhile (sync, another device, another editor), the server does a line-level three-way merge. Real clashes get git-style conflict markers and a banner in the note.
 
 ## Editor
 
-Source / split / preview (Ctrl+E cycles). Preview checkboxes are clickable and edit the source line; checking an item stamps `✅ date`. Tasks live in your notes: there is no separate task list view. `[[wikilinks]]` (clicking a missing one creates the note), backlinks, #tag search, full-text search, and drag-and-drop in the file tree.
+Source / split / preview (Ctrl+E cycles). Preview checkboxes are clickable and edit the source line; checking an item stamps `✅ date` and moves it, with its sub-items, under a **Complete** heading at the end of its section (unchecking moves it back; Settings → Sync turns this off). That happens for items checked in a task app too. Tasks live in your notes: there is no separate task list view. `[[wikilinks]]` (clicking a missing one creates the note; renaming or moving a note or folder updates links to it), backlinks, #tag search, full-text search, and drag-and-drop in the file tree.
+
+Settings → **Appearance** has themes (per device) and **custom CSS** (per user, on every device; open Tickmark with `?nocss` to load it without). Settings → **Branding** sets the name, logo and favicon everyone sees, including on the sign-in screen and as the installed app (admins only once sign-in is on).
 
 | Key | |
 |---|---|
@@ -205,4 +207,4 @@ CALDAV_TEST_URL=http://127.0.0.1:5232/ CALDAV_TEST_USER=test node --test test/  
 - Recurring rules using `BYSETPOS`, `BYWEEKNO`, `BYYEARDAY` or hourly parts sync, and show as the raw rule, but Tickmark can't work out their next date, so completing one ends the series. Calendar events (VEVENT) aren't synced, only todos.
 - CalDAV auth is Basic or Digest (MD5/SHA-256, `qop=auth`), whichever the server asks for. Basic is sent up front only over HTTPS or to localhost. No OAuth; for iCloud or Fastmail, use an app password.
 - Notes aren't shared between users.
-- Renaming a note doesn't rewrite `[[links]]` to it.
+- Renaming updates `[[wikilinks]]`, not relative markdown links like `[text](Other.md)`.
