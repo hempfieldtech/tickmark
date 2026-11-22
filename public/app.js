@@ -640,7 +640,9 @@ setInterval(() => { if (!S.saving) updateSaveState(); }, 30000);
 // save. One write per pause means the file on disk and the editor don't trade half-typed versions
 // with sync. Leaving the note, the editor or the page saves straight away.
 const TYPING_PAUSE = 8000;
-const scheduleSave = debounce(() => save(), TYPING_PAUSE);
+const slowSave = debounce(() => save(), TYPING_PAUSE);
+const liveSave = debounce(() => save(), 800); // someone else has the note open: share edits quickly
+const scheduleSave = () => (othersHere().length ? liveSave() : slowSave());
 const saveSoon = debounce(() => save(), 300);
 
 async function save() {
@@ -756,6 +758,8 @@ async function open(path, { line = null, push = true } = {}) {
   renderWordCount();
   renderTree();
   updateSaveState();
+  reportPresence();
+  renderPresence();
   if (mobile.matches) el.app.classList.remove('sidebar-open');
   if (line != null) {
     const v = el.editor.value;
@@ -1999,11 +2003,15 @@ $('#login-form').addEventListener('submit', async (e) => {
 
 // ---------------------------------------------------------------- live updates from the server
 function connectEvents() {
-  const es = new EventSource('/api/events');
+  const es = new EventSource(`/api/events?pid=${enc(PID)}`);
   es.addEventListener('file', (e) => {
     const d = JSON.parse(e.data);
-    if (d.path === S.path && d.hash !== S.hash) reloadIfClean();
+    if (d.path !== S.path || d.hash === S.hash) return;
+    // Someone else changed the note. Collaborating: send our edits now, and the server's merge comes back.
+    if (othersHere().length && el.editor.value !== S.base) flushSave();
+    else reloadIfClean();
   });
+  es.addEventListener('presence', (e) => { S.presence = JSON.parse(e.data); renderPresence(); });
   es.addEventListener('tree', () => scheduleTree());
   es.addEventListener('sync', (e) => {
     S.sync = JSON.parse(e.data);
@@ -2011,6 +2019,37 @@ function connectEvents() {
     noticeDeletions(S.sync);
   });
   es.onopen = () => flushPending();
+}
+
+// ---------------------------------------------------------------- live collaboration (presence)
+// Each tab says which note it has open (and the cursor's line). When others are on the same note,
+// edits save within a second and theirs merge in as they arrive; chips show who's there.
+const PID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+S.presence = { people: [], publicViewers: {} };
+const othersHere = () => (S.mode === 'note' && S.collab ? S.presence.people.filter((p) => p.path === S.path && p.id !== PID) : []);
+const cursorLine = () => el.editor.value.slice(0, el.editor.selectionStart).split('\n').length - 1;
+const reportPresence = debounce(async () => {
+  const path = S.mode === 'note' ? S.path : null;
+  try {
+    const r = await api('POST', '/api/presence', { id: PID, path, line: path ? cursorLine() : null });
+    if (S.collab !== r.allowed) { S.collab = r.allowed; renderPresence(); }
+  } catch {}
+}, 600);
+setInterval(() => { if (document.visibilityState === 'visible' && S.mode === 'note') reportPresence(); }, 25000);
+el.editor.addEventListener('keyup', () => reportPresence());
+el.editor.addEventListener('click', () => reportPresence());
+addEventListener('pagehide', () => { fetch(`/api/presence?id=${enc(PID)}`, { method: 'DELETE', keepalive: true }).catch(() => {}); });
+const hue = (id) => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+function renderPresence() {
+  const box = $('#presence');
+  const others = othersHere();
+  const watching = S.collab && S.mode === 'note' ? S.presence.publicViewers?.[S.path] || 0 : 0;
+  box.innerHTML = others.map((p) => {
+    const who = p.name || 'You';
+    const label = `${who} · ${p.device}${p.line != null ? ` · line ${p.line + 1}` : ''}`;
+    return `<span class="pchip" style="--h:${hue(p.id)}" title="${esc(label)}">${esc((p.name || p.device || '?')[0].toUpperCase())}</span>`;
+  }).join('') + (watching ? `<span class="pchip watch" title="${watching} ${watching === 1 ? 'person is' : 'people are'} viewing through the public link">👁 ${watching}</span>` : '');
+  box.title = others.length ? 'Also editing this note: edits are shared within a second' : '';
 }
 
 // ---------------------------------------------------------------- global shortcuts

@@ -343,3 +343,9 @@ test('checkbox states: in progress and cancelled', async () => {
   assert.doesNotMatch(c, /COMPLETED:/);
   assert.deepEqual([todoModel(findTodo(parseICS(c))).model.done, todoModel(findTodo(parseICS(c))).model.status], [true, 'cancelled']);
 });
+
+test('merge3: edits to neighbouring lines from both sides merge without a conflict', () => {
+  const base = '# Collab\nline one\nline two\n';
+  assert.deepEqual(merge3(base, '# Collab\nline ONE\nline two\n', '# Collab\nline one\nline TWO\n'), { text: '# Collab\nline ONE\nline TWO\n', conflicts: 0 });
+  assert.equal(merge3(base, '# Collab\nA\nline two\n', '# Collab\nB\nline two\n').conflicts, 1, 'the same line changed two ways still conflicts');
+});

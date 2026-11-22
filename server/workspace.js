@@ -13,12 +13,17 @@ import { History } from './history.js';
 /** How long after a file changes outside Tickmark to sync it (editors often write in several steps). */
 const EXTERNAL_SYNC_DELAY = Number(process.env.TICKMARK_EXTERNAL_SYNC_MS) || 3000;
 
+const covers = (c, rel) => (c.kind === 'note' ? c.path === rel : rel.startsWith(c.path + '/'));
+
 export class Workspace {
   constructor({ name = null, dataDir, vaultDir, cipher }) {
     this.name = name;
     this.dataDir = dataDir;
     this.vaultDir = vaultDir;
     this.clients = new Set();
+    // Live collaboration: who has which note open (by browser tab), and public-link viewers.
+    this.presence = new Map(); // tab id → { id, name, device, path, line, at }
+    this.publicClients = new Set(); // { res, kind: 'note' | 'folder', path }
     this.config = new Config(dataDir, { cipher, owner: name || '' });
     this.index = new Index(path.join(dataDir, 'index.sqlite'));
     this.index.migrateLegacyStates(this.config.get().accounts[0]?.id);
@@ -62,7 +67,25 @@ export class Workspace {
   broadcast(event, data) {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const res of this.clients) res.write(msg);
+    // Public pages showing that note (or its folder) reload it.
+    if (event === 'file') for (const c of this.publicClients) if (covers(c, data.path)) c.res.write(`event: change\ndata: ${JSON.stringify({})}\n\n`);
   }
+
+  // ---- presence
+  setPresence(entry) {
+    this.presence.set(entry.id, { ...entry, at: Date.now() });
+    this.broadcastPresence();
+  }
+  dropPresence(id) { if (this.presence.delete(id)) this.broadcastPresence(); }
+  /** Everyone's open note and line, and how many public-link visitors each note has. */
+  presenceState() {
+    const cutoff = Date.now() - 60_000; // tabs that stopped reporting (closed without saying so)
+    for (const [id, p] of this.presence) if (p.at < cutoff) this.presence.delete(id);
+    const viewers = {};
+    for (const c of this.publicClients) if (c.kind === 'note') viewers[c.path] = (viewers[c.path] || 0) + 1;
+    return { people: [...this.presence.values()].map(({ at, ...p }) => p), publicViewers: viewers };
+  }
+  broadcastPresence() { this.broadcast('presence', this.presenceState()); }
 
   scheduleScan() {
     clearTimeout(this.scanTimer);

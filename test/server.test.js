@@ -638,3 +638,53 @@ test('note history: versions, differences and restore (git)', async () => {
     assert.equal((await c.call('GET', `/api/history/version?path=Journal%2FDiary%202026.md&hash=nothex`)).status, 400);
   } finally { await srv.stop(); }
 });
+
+test('live collaboration: presence, gated by sign-in or a public link, and live public pages', async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault'), TICKMARK_PUBLIC_URL: 'https://notes.example.com' });
+  const c = client(srv.base);
+  /** Read server-sent events until `want` matches one (or time runs out). */
+  const listen = (url) => {
+    const ctl = new AbortController();
+    const events = [];
+    const done = fetch(srv.base + url, { signal: ctl.signal }).then(async (r) => {
+      const dec = new TextDecoder();
+      let buf = '';
+      for await (const chunk of r.body) {
+        buf += dec.decode(chunk);
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, i); buf = buf.slice(i + 2);
+          const ev = /^event: (.*)$/m.exec(block)?.[1];
+          if (ev) events.push({ ev, data: JSON.parse(/^data: (.*)$/m.exec(block)?.[1] || 'null') });
+        }
+      }
+    }).catch(() => {});
+    const until = async (pred, ms = 3000) => { const t = Date.now(); while (Date.now() - t < ms) { const e = events.find(pred); if (e) return e; await new Promise((r) => setTimeout(r, 30)); } return null; };
+    return { events, until, close: () => { ctl.abort(); return done; } };
+  };
+  try {
+    await c.call('POST', '/api/file', { path: 'Shared.md', content: 'hello\n' });
+    await c.call('POST', '/api/file', { path: 'Private.md', content: 'mine\n' });
+    // Single-user mode: only notes with a public link are collaborative.
+    assert.deepEqual((await c.call('POST', '/api/presence', { id: 'tab1', path: 'Private.md', line: 0 })).data, { allowed: false });
+    const share = (await c.call('POST', '/api/shares', { path: 'Shared.md' })).data;
+    const a = listen('/api/events?pid=tab1');
+    assert.deepEqual((await c.call('POST', '/api/presence', { id: 'tab1', path: 'Shared.md', line: 3 })).data, { allowed: true });
+    const p = await a.until((e) => e.ev === 'presence' && e.data.people.some((x) => x.id === 'tab1'));
+    assert.equal(p.data.people.find((x) => x.id === 'tab1').line, 3);
+    // A public visitor counts as a viewer, and their page hears about changes.
+    const v = listen(`/api/public/${share.token}/events`);
+    assert.ok(await a.until((e) => e.ev === 'presence' && e.data.publicViewers['Shared.md'] === 1), 'editors see the visitor');
+    await c.call('PUT', '/api/file?path=Shared.md', { content: 'hello again\n' });
+    assert.ok(await v.until((e) => e.ev === 'change'), 'the public page is told to reload');
+    assert.equal((await fetch(`${srv.base}/api/public/nope/events`)).status, 404);
+    await v.close();
+    assert.ok(await a.until((e) => e.ev === 'presence' && !e.data.publicViewers['Shared.md']), 'visitor gone');
+    // Closing the tab's stream drops its presence.
+    const b = listen('/api/events?pid=tab2');
+    await a.close();
+    assert.ok(await b.until((e) => e.ev === 'presence' && !e.data.people.some((x) => x.id === 'tab1')));
+    await b.close();
+  } finally { await srv.stop(); }
+});

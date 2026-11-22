@@ -40,7 +40,19 @@ function refine(oc, ac, bc) {
     oc.forEach((line, i) => { if (rep[i] !== line) out[m[i]] = rep[i]; });
     return out;
   };
-  return tryOne(ac, bc) || tryOne(bc, ac);
+  // Both sides changed lines one-for-one (e.g. two people editing neighbouring lines): take each
+  // side's change per line, as long as no single line was changed differently by both.
+  const lineByLine = () => {
+    if (ac.length !== oc.length || bc.length !== oc.length) return null;
+    const out = [];
+    for (let i = 0; i < oc.length; i++) {
+      if (ac[i] === oc[i] || ac[i] === bc[i]) out.push(bc[i]);
+      else if (bc[i] === oc[i]) out.push(ac[i]);
+      else return null;
+    }
+    return out;
+  };
+  return tryOne(ac, bc) || tryOne(bc, ac) || lineByLine();
 }
 
 /** Merge `ours` and `theirs`, both derived from `base`. Returns { text, conflicts }. */

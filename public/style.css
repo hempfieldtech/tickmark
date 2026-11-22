@@ -465,3 +465,10 @@ details.card[open] summary { margin-bottom: 4px; }
   .history-body { grid-template-columns: 1fr; grid-template-rows: 150px minmax(0, 1fr); height: 75vh; }
   .history-list { border-right: 0; border-bottom: 1px solid var(--line); }
 }
+
+/* Live collaboration: who else has this note open */
+#presence { display: inline-flex; align-items: center; gap: 4px; }
+#presence:empty { display: none; }
+.pchip { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px; font-size: 12px; font-weight: 700;
+  color: #fff; background: hsl(var(--h, 200) 55% 45%); box-shadow: 0 0 0 2px var(--bg); cursor: default; }
+.pchip.watch { background: var(--accent-soft); color: var(--accent); font-weight: 600; }

@@ -84,7 +84,17 @@ function renderFiles(active) {
   }).join('') : '<p class="share-empty">No notes here yet.</p>');
 }
 
-async function load(push = false) {
+// Live updates: the page re-reads the note when it changes (keeping the scroll position).
+let live = null, liveFor = null;
+function watch(sub) {
+  if (liveFor === sub && live) return;
+  live?.close();
+  liveFor = sub;
+  live = new EventSource(`/api/public/${encodeURIComponent(token)}/events${sub ? `?path=${encodeURIComponent(sub)}` : ''}`);
+  live.addEventListener('change', () => { const y = scrollY; load(false, true).then(() => scrollTo(0, y)); });
+}
+
+async function load(push = false, quiet = false) {
   const sub = decodeURIComponent(location.pathname.slice(base.length + 1)) || '';
   let data;
   try {
@@ -92,6 +102,7 @@ async function load(push = false) {
     data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Not found');
   } catch (e) {
+    if (quiet) return; // a live refresh that failed: keep showing what's there
     $('#doc').innerHTML = `<p class="share-error">${esc(e.message)}</p>`;
     document.title = 'Not found';
     return;
@@ -102,6 +113,7 @@ async function load(push = false) {
   if (data.kind === 'note') {
     render(data.content, data.name);
     document.title = `${data.name} · ${b.name || 'Tickmark'}`;
+    watch('');
     return;
   }
   files = data.files;
@@ -109,7 +121,7 @@ async function load(push = false) {
   if (!data.path && files.length) { history.replaceState(null, '', hrefFor(files[0])); return load(); }
   renderFiles(data.path);
   $('#crumb').textContent = data.name;
-  if (data.path) render(data.content, title(data.path));
+  if (data.path) { render(data.content, title(data.path)); watch(data.path); }
   else $('#doc').innerHTML = '<p class="share-empty">This folder has no notes yet.</p>';
   document.title = `${data.path ? title(data.path) + ' · ' : ''}${data.name} · ${b.name || 'Tickmark'}`;
   if (push) scrollTo(0, 0);

@@ -192,6 +192,39 @@ function serveStatic(req, res, pathname) {
   });
 }
 
+/** Live updates for a public page: "change" whenever its note (or a note in its folder) changes. */
+function publicEvents(req, res, token, sub) {
+  let ws, entry;
+  try {
+    const s = shares.get(token);
+    publicShare(token, sub); // validates the token and the path
+    ws = workspaceFor(s.owner ?? undefined);
+    entry = { res, kind: s.kind, path: s.kind === 'folder' && sub ? `${s.path}/${sub}` : s.path };
+    if (s.kind === 'folder' && sub) entry.kind = 'note';
+  } catch (e) { return json(res, e.status || 404, { error: e.message }); }
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Robots-Tag': 'noindex' });
+  res.write(': hi\n\n');
+  ws.publicClients.add(entry);
+  ws.broadcastPresence(); // editors see the visitor count go up
+  const ping = setInterval(() => res.write(': ping\n\n'), 25000);
+  req.on('close', () => { ws.publicClients.delete(entry); clearInterval(ping); ws.broadcastPresence(); });
+}
+
+/**
+ * Live collaboration is on for a note in multi-user mode, or when it has an active public link
+ * (which needs a domain-based public URL).
+ */
+function collabAllowed(user, rel) {
+  if (MULTI) return true;
+  if (shareBlocker(oidc.publicUrl)) return false;
+  return shares.list(owner(user)).some((s) => (s.kind === 'note' ? s.path === rel : rel.startsWith(s.path + '/')));
+}
+const deviceName = (ua = '') => {
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : '';
+  return os ? `${browser} on ${os}` : browser;
+};
+
 function serveShareShell(res) {
   fs.readFile(path.join(PUBLIC, 'share.html'), 'utf8', (err, src) => {
     if (err) return json(res, 404, { error: 'Not found' });
@@ -290,6 +323,16 @@ const routes = {
     shares.moved(owner(user), String(body.from), String(body.to));
     return { ok: true, updated };
   },
+  // ---- live collaboration: which note each open tab is on
+  'POST /api/presence': ({ ws, user, req }, q, body) => {
+    const id = String(body.id || '').slice(0, 64);
+    if (!id) throw Object.assign(new Error('Missing id'), { status: 400 });
+    const rel = body.path ? String(body.path) : null;
+    if (!rel || !collabAllowed(user, rel)) { ws.dropPresence(id); return { allowed: false }; }
+    ws.setPresence({ id, path: rel, line: Number.isInteger(body.line) ? body.line : null, name: user?.name || null, device: deviceName(req.headers['user-agent']) });
+    return { allowed: true };
+  },
+  'DELETE /api/presence': ({ ws }, q) => { ws.dropPresence(String(q.get('id') || '')); return { ok: true }; },
   // ---- version history of a note (git, in the data folder)
   'GET /api/history': async ({ ws }, q) => {
     const versions = await ws.history.versions(String(q.get('path') || ''));
@@ -552,6 +595,8 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   // Public links: no sign-in, read-only, and nothing else of the instance is reachable through them.
   if (req.method === 'GET' && /^\/s\/[\w-]+(\/.*)?$/.test(url.pathname)) return serveShareShell(res);
+  const pubEvents = req.method === 'GET' && url.pathname.match(/^\/api\/public\/([\w-]+)\/events$/);
+  if (pubEvents) return publicEvents(req, res, pubEvents[1], url.searchParams.get('path'));
   const pub = req.method === 'GET' && url.pathname.match(/^\/api\/public\/([\w-]+)$/);
   if (pub) {
     try {
@@ -585,8 +630,10 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
       res.write(`event: sync\ndata: ${JSON.stringify(ws.sync.status)}\n\n`);
       ws.clients.add(res);
+      res.write(`event: presence\ndata: ${JSON.stringify(ws.presenceState())}\n\n`);
+      const pid = url.searchParams.get('pid');
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-      req.on('close', () => { ws.clients.delete(res); clearInterval(ping); });
+      req.on('close', () => { ws.clients.delete(res); clearInterval(ping); if (pid) ws.dropPresence(pid); });
       return;
     }
     const handler = routes[key];
