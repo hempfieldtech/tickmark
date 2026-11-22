@@ -126,6 +126,20 @@ test('bi-directional sync', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, asy
     assert.match(read('Projects/Trip.md'), /- \[x\] Pack #task/, 'completes once its sub-items are done');
   });
 
+  await t.test('in progress and cancelled sync both ways', async () => {
+    write('Projects/States.md', '- [/] Write report #task\n- [ ] Book venue #task\n');
+    await engine.run();
+    assert.match((await byTitle('Write report')).ics, /STATUS:IN-PROCESS/);
+    await editRemote('Book venue', { status: 'in-progress' });
+    await engine.run();
+    assert.match(read('Projects/States.md'), /- \[\/\] Book venue #task/);
+    write('Projects/States.md', read('Projects/States.md').replace('- [/] Write report', '- [-] Write report'));
+    await engine.run();
+    const r = await byTitle('Write report');
+    assert.deepEqual([r.model.done, r.model.status], [true, 'cancelled']);
+    assert.match(r.ics, /STATUS:CANCELLED/);
+  });
+
   await t.test('imports todos created on the server', async () => {
     const uid = 'remote-' + Date.now();
     await client.put(calUrl + uid + '.ics', buildTodo({ uid, model: { title: 'From phone', done: false, due: null, priority: 9 } }), { create: true });

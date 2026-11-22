@@ -402,3 +402,9 @@ details.card[open] summary { margin-bottom: 4px; }
 .shares-list-url { font-size: 12px; color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-dlg a { color: var(--accent); }
 .set-body .sub-head { margin: 18px 0 0; font-size: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+/* Checkbox states: in progress (half-filled) and cancelled (struck through, an x) */
+.task-cb:indeterminate { border-color: var(--accent); background: linear-gradient(to right, var(--accent) 50%, var(--surface) 50%); }
+.task-cb[data-state="cancelled"]:checked { background: var(--muted); border-color: var(--muted); }
+.task-cb[data-state="cancelled"]:checked::after { content: "✕"; width: auto; height: auto; border: 0; transform: none; color: var(--surface); font-size: 11px; line-height: 1; font-weight: 700; }
+.md li.cancelled-item { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }

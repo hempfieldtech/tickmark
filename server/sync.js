@@ -16,8 +16,8 @@ import { buildTodo, parseICS, findTodo, todoModel, occurrenceCompleted } from '.
 import { CalDAV } from './caldav.js';
 import { fingerprint } from './secrets.js';
 
-const FIELDS = ['title', 'done', 'due', 'priority', 'recur'];
-const norm = (k, v) => (k === 'priority' ? v || 0 : k === 'due' || k === 'recur' ? v || null : v);
+const FIELDS = ['title', 'done', 'status', 'due', 'priority', 'recur'];
+const norm = (k, v) => (k === 'priority' ? v || 0 : k === 'due' || k === 'recur' || k === 'status' ? v || null : v);
 
 function merge(L, R, B) {
   if (!B) return { ...L };
@@ -252,7 +252,7 @@ export class SyncEngine {
       if (!vt) continue;
       const info = todoModel(vt);
       if (!info.uid) continue;
-      if (info.cancelled) info.model.done = true;
+      if (info.cancelled) Object.assign(info.model, { done: true, status: 'cancelled' });
       if (info.model.recur && !info.model.done && occurrenceCompleted(root, vt)) info.model.done = true;
       remote.set(info.uid, { ...r, ...info });
     }

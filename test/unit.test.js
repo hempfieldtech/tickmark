@@ -57,7 +57,7 @@ test('ical round trip preserves foreign properties', () => {
   const withAlarm = ics.replace('END:VTODO', 'X-FOO:bar\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\nEND:VTODO');
   const next = buildTodo({ existing: withAlarm, uid: 'u1', model: { title: 'A, b; c', done: true, due: '2026-11-25 09:00', priority: 5 } });
   const info = todoModel(findTodo(parseICS(next)));
-  assert.deepEqual(info.model, { title: 'A, b; c', done: true, due: '2026-11-25 09:00', priority: 5, recur: null });
+  assert.deepEqual(info.model, { title: 'A, b; c', done: true, status: null, due: '2026-11-25 09:00', priority: 5, recur: null });
   assert.equal(info.tickmarkId, 't1');
   assert.match(next, /X-FOO:bar/);
   assert.match(next, /BEGIN:VALARM/);
@@ -318,4 +318,28 @@ test('open sub-items under an item', async () => {
   assert.equal(openSubtasks(t, 2), 1);
   assert.equal(openSubtasks(t, 5), 1);
   assert.equal(openSubtasks('- [ ] Alone\n- [ ] Sibling', 0), 0);
+});
+
+test('checkbox states: in progress and cancelled', async () => {
+  const { setTaskState, fileCompleted } = await import('../public/shared/tasks.js');
+  const text = '- [/] Draft #task\n- [-] Old idea #task\n- [x] Done #task\n- [ ] Todo #task';
+  assert.deepEqual(parseTasks(text, opts).map((t) => [t.done, t.status]), [[false, 'in-progress'], [true, 'cancelled'], [true, null], [false, null]]);
+  const [prog, canc] = parseTasks(text, opts);
+  assert.equal(buildTaskLine(prog, taskModel(prog)), '- [/] Draft #task');
+  assert.equal(buildTaskLine(canc, { ...taskModel(canc) }, { doneDate: '2026-01-01' }), '- [-] Old idea #task', 'no ✅ date on cancelled');
+  assert.match(toggleLine(text, 0).split('\n')[0], /^- \[x\] Draft #task ✅ \d{4}/, 'in progress → done');
+  assert.equal(toggleLine(text, 1).split('\n')[1], '- [ ] Old idea #task', 'cancelled → to do');
+  assert.equal(setTaskState(text, 3, '/').split('\n')[3], '- [/] Todo #task');
+  assert.equal(setTaskState('- [x] Done ✅ 2026-01-01', 0, '-'), '- [-] Done');
+  assert.match(setTaskState('- [-] X', 0, 'x'), /^- \[x\] X ✅ /);
+  assert.deepEqual(checkboxLines(text), [0, 1, 2, 3]);
+  assert.equal(fileCompleted('# A\n- [-] Gone\n- [ ] Stay', 1), '# A\n- [ ] Stay\n\n## Complete\n- [-] Gone', 'cancelled counts as finished');
+  // CalDAV
+  const ics = buildTodo({ uid: 'u', model: { title: 'Draft', done: false, status: 'in-progress', due: null, priority: 0, recur: null } });
+  assert.match(ics, /STATUS:IN-PROCESS/);
+  assert.equal(todoModel(findTodo(parseICS(ics))).model.status, 'in-progress');
+  const c = buildTodo({ existing: ics, uid: 'u', model: { title: 'Draft', done: true, status: 'cancelled', due: null, priority: 0, recur: null } });
+  assert.match(c, /STATUS:CANCELLED/);
+  assert.doesNotMatch(c, /COMPLETED:/);
+  assert.deepEqual([todoModel(findTodo(parseICS(c))).model.done, todoModel(findTodo(parseICS(c))).model.status], [true, 'cancelled']);
 });

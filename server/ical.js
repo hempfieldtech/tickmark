@@ -149,7 +149,8 @@ export function todoModel(vtodo) {
   return {
     model: {
       title: summary ? unescapeText(summary.value).replace(/\s+/g, ' ').trim() : '',
-      done,
+      done: done || status === 'CANCELLED',
+      status: status === 'CANCELLED' ? 'cancelled' : status === 'IN-PROCESS' && !done ? 'in-progress' : null,
       due: due ? icalToLocal(due.value, due.params) : null,
       priority: prio,
       recur,
@@ -189,12 +190,16 @@ export function buildTodo({ existing = null, uid, model, tickmarkId, description
   const add = (raw) => vtodo.props.push(prop(raw));
 
   if (!prev || prev.title !== model.title) { drop('SUMMARY'); add(`SUMMARY:${escapeText(model.title)}`); }
-  if (!prev || prev.done !== model.done) {
+  if (!prev || prev.done !== model.done || (prev.status || null) !== (model.status || null)) {
     drop('STATUS', 'COMPLETED', 'PERCENT-COMPLETE');
-    if (model.done) {
+    if (model.status === 'cancelled') {
+      add('STATUS:CANCELLED');
+    } else if (model.done) {
       add('STATUS:COMPLETED');
       add('PERCENT-COMPLETE:100');
       add(`COMPLETED:${doneDate ? doneDate.replace(/-/g, '') + 'T120000Z' : now}`);
+    } else if (model.status === 'in-progress') {
+      add('STATUS:IN-PROCESS');
     } else {
       add('STATUS:NEEDS-ACTION');
     }

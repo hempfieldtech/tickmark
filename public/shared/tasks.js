@@ -14,8 +14,15 @@
 
 import { parseRecurrence, describeRecurrence, nextOccurrence } from './recur.js';
 
-export const TASK_LINE = /^(\s*(?:>\s*)*)([-*+]|\d+[.)])\s+\[([ xX])\](?:\s+(.*))?$/;
-export const ANY_CHECKBOX = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\](?:\s|$)/;
+// Checkbox states: [ ] to do, [/] in progress, [x] done, [-] cancelled (counts as finished).
+export const TASK_LINE = /^(\s*(?:>\s*)*)([-*+]|\d+[.)])\s+\[([ xX/-])\](?:\s+(.*))?$/;
+export const ANY_CHECKBOX = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX/-]\](?:\s|$)/;
+/** A state character's meaning: done (finished, either way) and status (in-progress / cancelled / null). */
+export const STATE = {
+  ' ': { done: false, status: null }, '/': { done: false, status: 'in-progress' },
+  x: { done: true, status: null }, X: { done: true, status: null }, '-': { done: true, status: 'cancelled' },
+};
+export const stateChar = ({ done, status }) => (status === 'cancelled' ? '-' : done ? 'x' : status === 'in-progress' ? '/' : ' ');
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const FENCE = /^\s*(`{3,}|~{3,})/;
 const BLOCK_ID = /(?:^|\s)\^([A-Za-z0-9-]+)\s*$/;
@@ -138,7 +145,8 @@ export function parseTasks(text, { itemTags = ['task'], sectionTags = ['sync'] }
       line: i,
       prefix: m[1],
       bullet: m[2],
-      done: m[3] !== ' ',
+      done: STATE[m[3]].done,
+      status: STATE[m[3]].status,
       ...t,
       synced,
       scopeTags,
@@ -204,12 +212,12 @@ export function checkboxLines(text) {
 
 /** The fields that are synced with CalDAV. */
 export function taskModel(t) {
-  return { title: t.title, done: !!t.done, due: t.due || null, priority: t.priority || 0, recur: t.recur || null };
+  return { title: t.title, done: !!t.done, status: t.status || null, due: t.due || null, priority: t.priority || 0, recur: t.recur || null };
 }
 
 export function modelsEqual(a, b) {
   if (!a || !b) return false;
-  return a.title === b.title && a.done === b.done && (a.due || null) === (b.due || null) &&
+  return a.title === b.title && a.done === b.done && (a.status || null) === (b.status || null) && (a.due || null) === (b.due || null) &&
     (a.priority || 0) === (b.priority || 0) && (a.recur || null) === (b.recur || null);
 }
 
@@ -221,10 +229,10 @@ export function buildTaskLine(task, model, { doneDate = null, extraTags = [] } =
   if (model.priority) parts.push(priorityEmoji(model.priority));
   if (model.recur) parts.push('🔁 ' + describeRecurrence(model.recur));
   if (model.due) parts.push('📅 ' + model.due);
-  const dd = model.done ? (doneDate || task.doneDate) : null;
+  const dd = model.done && model.status !== 'cancelled' ? (doneDate || task.doneDate) : null;
   if (dd) parts.push('✅ ' + dd);
   if (task.blockId) parts.push('^' + task.blockId);
-  return `${task.prefix || ''}${task.bullet || '-'} [${model.done ? 'x' : ' '}] ${parts.join(' ')}`;
+  return `${task.prefix || ''}${task.bullet || '-'} [${stateChar(model)}] ${parts.join(' ')}`;
 }
 
 /**
@@ -251,9 +259,9 @@ export function toggleLine(text, lineNo, { stampDone = true } = {}) {
   const lines = text.split('\n');
   const line = lines[lineNo];
   if (line == null) return text;
-  const m = line.match(/^(\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\].*)$/);
+  const m = line.match(/^(\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[)([ xX/-])(\].*)$/);
   if (!m) return text;
-  const nowDone = m[2] === ' ';
+  const nowDone = !STATE[m[2]].done; // to do or in progress → done; done or cancelled → to do
   if (nowDone && stampDone) {
     const tm = line.match(TASK_LINE);
     const t = tm && { prefix: tm[1], bullet: tm[2], done: false, ...parseTaskBody(tm[4]) };
@@ -299,9 +307,9 @@ export const COMPLETE_HEADING = 'Complete';
  */
 export function fileCompleted(text, lineNo) {
   const lines = text.split('\n');
-  const m = lines[lineNo]?.match(/^((?:[-*+]|\d+[.)])\s+)\[([ xX])\]/);
+  const m = lines[lineNo]?.match(/^((?:[-*+]|\d+[.)])\s+)\[([ xX/-])\]/);
   if (!m) return null;
-  const done = m[2] !== ' ';
+  const done = STATE[m[2]].done;
   // Headings outside code blocks: [{ i, level, name }]
   const heads = [];
   let fence = null;
@@ -399,7 +407,23 @@ export function openSubtasks(text, lineNo) {
     const l = lines[i];
     if (!l.trim()) continue;
     if (indent(l) <= base) break;
-    if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[ \]/.test(l)) open++;
+    if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ /]\]/.test(l)) open++;
   }
   return open;
+}
+
+/**
+ * Set the item on `lineNo` to a state character (' ', '/', 'x', '-'). Becoming done goes through
+ * toggleLine, so it gets its ✅ date (and a recurring item moves on); leaving done drops the date.
+ */
+export function setTaskState(text, lineNo, ch) {
+  const lines = text.split('\n');
+  const m = lines[lineNo]?.match(/^(\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[)([ xX/-])(\].*)$/);
+  if (!m || m[2] === ch || (STATE[m[2]].done && !STATE[m[2]].status && 'xX'.includes(ch))) return text;
+  if (ch === 'x' || ch === 'X') {
+    if (STATE[m[2]].done) { lines[lineNo] = m[1] + ' ' + m[3]; text = lines.join('\n'); } // cancelled → done
+    return toggleLine(text, lineNo);
+  }
+  lines[lineNo] = m[1] + ch + m[3].replace(DONE_DATE, '');
+  return lines.join('\n');
 }

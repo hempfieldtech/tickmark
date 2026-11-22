@@ -1,5 +1,5 @@
 import { marked } from './vendor/marked.esm.js';
-import { checkboxLines, toggleLine, fileCompleted, openSubtasks, parseTasks, normTag, localDate } from './shared/tasks.js';
+import { checkboxLines, toggleLine, setTaskState, fileCompleted, openSubtasks, parseTasks, normTag, localDate } from './shared/tasks.js';
 import { parseRecurrence, describeRecurrence } from './shared/recur.js';
 import { textStats } from './shared/words.js';
 
@@ -186,6 +186,22 @@ function renderPreview() {
   }
   cbIndex = 0;
   el.preview.innerHTML = head + marked.parse(body);
+  // Markdown only knows [ ] and [x]: turn "[/] …" and "[-] …" list items into checkboxes too, then
+  // number every checkbox in document order (the order checkboxLines() lists their source lines).
+  el.preview.querySelectorAll('li').forEach((li) => {
+    const host = li.firstChild?.nodeName === 'P' ? li.firstChild : li;
+    const t = host.firstChild;
+    const m = t?.nodeType === 3 && /^\[([/-])\]\s/.exec(t.textContent);
+    if (!m) return;
+    t.textContent = t.textContent.slice(m[0].length);
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'task-cb';
+    cb.dataset.state = m[1] === '/' ? 'progress' : 'cancelled';
+    if (m[1] === '-') cb.checked = true;
+    host.insertBefore(cb, host.firstChild);
+  });
+  el.preview.querySelectorAll('input.task-cb').forEach((cb, i) => (cb.dataset.i = i));
 
   const lines = checkboxLines(text);
   const synced = new Set(parseTasks(text, tagOpts()).filter((t) => t.synced).map((t) => t.line));
@@ -194,6 +210,8 @@ function renderPreview() {
     const li = cb.closest('li');
     if (line == null) { cb.disabled = true; return; }
     cb.dataset.line = line;
+    if (cb.dataset.state === 'progress') { cb.indeterminate = true; cb.title = 'In progress'; li?.classList.add('progress-item'); }
+    if (cb.dataset.state === 'cancelled') { cb.title = 'Cancelled'; li?.classList.add('cancelled-item'); }
     if (cb.checked && li) {
       li.classList.add('done-item');
       li.querySelectorAll(':scope > .due, :scope > p > .due').forEach((d) => d.classList.remove('overdue', 'today'));
@@ -254,10 +272,25 @@ function setEditorText(text) {
   scheduleWordCount();
 }
 
+/** Set an item's state from the checkbox menu, with the same sub-item rule and "Complete" filing as a click. */
+function setTaskStateFiled(text, lineNo, ch) {
+  const was = (text.split('\n')[lineNo] || '').match(/\[([ xX/-])\]/)?.[1];
+  if (was === undefined || was === ch) return text;
+  const finishing = 'xX-'.includes(ch) && !'xX-'.includes(was);
+  if (finishing && ch !== '-') return toggleTask(text, lineNo); // a normal check: date, recurrence, filing
+  if (finishing) {
+    const open = openSubtasks(text, lineNo);
+    if (open && parseTasks(text, tagOpts()).some((t) => t.line === lineNo && t.synced)) { toast(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`); return text; }
+  }
+  const next = setTaskState(text, lineNo, ch);
+  if (S.config?.moveCompleted === false || 'xX-'.includes(ch) === 'xX-'.includes(was)) return next;
+  return fileCompleted(next, lineNo) ?? next;
+}
+
 /** Check or uncheck an item; with "move completed" on, it also moves under/out of the "Complete" heading. */
 function toggleTask(text, lineNo) {
   // A synced task can't be checked while it has unchecked sub-items.
-  if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[ \]/.test(text.split('\n')[lineNo] || '')) {
+  if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ /]\]/.test(text.split('\n')[lineNo] || '')) {
     const open = openSubtasks(text, lineNo);
     if (open && parseTasks(text, tagOpts()).some((t) => t.line === lineNo && t.synced)) {
       toast(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`);
@@ -356,6 +389,18 @@ el.editor.addEventListener('scroll', () => {
 });
 
 // ---------------------------------------------------------------- preview interaction
+// Right-click a checkbox in the preview to pick its state.
+el.preview.addEventListener('contextmenu', (e) => {
+  const cb = e.target.closest('input.task-cb');
+  const line = cb && Number(cb.dataset.line);
+  if (!cb || Number.isNaN(line)) return;
+  e.preventDefault();
+  const pick = (ch) => () => applyEdit(setTaskStateFiled(el.editor.value, line, ch));
+  showMenu(cb, [
+    { label: 'To do  [ ]', run: pick(' ') }, { label: 'In progress  [/]', run: pick('/') },
+    { label: 'Done  [x]', run: pick('x') }, { label: 'Cancelled  [-]', run: pick('-') },
+  ]);
+});
 el.preview.addEventListener('click', (e) => {
   const cb = e.target.closest('input.task-cb');
   if (cb) {
