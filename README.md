@@ -32,7 +32,7 @@ mkdir -p vault data                 # create these yourself first, or Docker mak
 docker compose up -d --build        # http://127.0.0.1:8087, notes in ./vault, settings in ./data
 ```
 
-A ready-made image is published as `ghcr.io/hempfieldtech/tickmark:latest` (set `image:` to it in `compose.yaml` and drop `build:` to use it instead of building).
+A ready-made image is published as `ghcr.io/hempfieldtech/tickmark:latest`, with each release also tagged by version (for example `:0.2.0`). Set `image:` to it in `compose.yaml` and drop `build:` to use it instead of building; pin a version tag if you want to choose when to upgrade.
 
 Edit `compose.yaml` to point `./vault` at an existing notes folder or set your timezone (`TZ`). The container runs as uid 1000 by default; set `UID`/`GID` if your files belong to someone else.
 
