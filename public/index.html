@@ -113,6 +113,18 @@
         <section data-sec="appearance" class="set-body">
           <p class="note">Theme for this device. It applies straight away.</p>
           <div id="themes" class="themes" role="radiogroup" aria-label="Theme"></div>
+          <div class="card css-card">
+            <h4>Custom CSS</h4>
+            <p class="note">Your own styles, on top of the theme, on every device you sign in on. Changes show as you type; Save keeps them.
+              Handy variables: <code>--accent</code> <code>--bg</code> <code>--surface</code> <code>--panel</code> <code>--text</code> <code>--muted</code> <code>--line</code> <code>--sans</code> <code>--mono</code> <code>--radius</code>.
+              If something goes wrong, open Tickmark with <code>?nocss</code> on the end of the address to load it without them.</p>
+            <textarea id="custom-css" rows="9" spellcheck="false" autocomplete="off" placeholder=":root { --accent: hotpink; }&#10;#editor { font-family: 'Comic Sans MS', cursive; }"></textarea>
+            <div class="row">
+              <button type="button" id="btn-css-save" class="btn primary">Save</button>
+              <button type="button" id="btn-css-revert" class="btn">Undo changes</button>
+              <span class="note" id="css-state"></span>
+            </div>
+          </div>
         </section>
 
         <section data-sec="account" class="set-body">

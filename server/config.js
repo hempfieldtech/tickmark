@@ -16,6 +16,8 @@ const DEFAULTS = {
   clientSyncMinutes: 5,
   // Checked items move under a "Complete" heading at the end of their section.
   moveCompleted: true,
+  // Your own CSS, applied on top of the theme on every device you use.
+  customCss: '',
 };
 
 const tagList = (v) => [...new Set((typeof v === 'string' ? v.split(/[,\s]+/) : v || [])
@@ -127,6 +129,11 @@ export class Config {
     }
     for (const k of ['serverSyncMinutes', 'clientSyncMinutes']) {
       if (patch[k] !== undefined) next[k] = Math.max(0, Number(patch[k]) || 0);
+    }
+    if (patch.customCss !== undefined) {
+      const css = String(patch.customCss ?? '');
+      if (css.length > 100_000) throw Object.assign(new Error('Custom CSS is limited to 100 KB'), { status: 400 });
+      next.customCss = css;
     }
     if (patch.moveCompleted !== undefined) next.moveCompleted = patch.moveCompleted === true || patch.moveCompleted === 'true';
     this.data = next;

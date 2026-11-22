@@ -1011,7 +1011,7 @@ function showSection(sec) {
   setDlg.querySelectorAll('.set-main > [data-sec]').forEach((x) => (x.hidden = x.dataset.sec !== sec));
   if (sec === 'users') loadUsers();
   if (sec === 'sso') loadSso();
-  if (sec === 'appearance') renderThemes();
+  if (sec === 'appearance') { renderThemes(); renderCssEditor(); }
 }
 setDlg.querySelectorAll('.set-nav [data-sec]').forEach((b) => (b.onclick = () => showSection(b.dataset.sec)));
 setDlg.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { e.preventDefault(); showSection(g.dataset.goto); } });
@@ -1056,6 +1056,37 @@ $('#themes').addEventListener('click', (e) => {
   renderThemes();
   $(`#themes .theme-opt[data-id="${b.dataset.id}"]`)?.focus();
 });
+
+// ---- custom CSS: live while typing, saved per user (follows them to every device)
+const cssBox = $('#custom-css');
+const savedCss = () => S.config?.customCss || '';
+function applyCustomCss() { window.tickmarkCss?.apply(savedCss()); }
+function renderCssEditor() {
+  cssBox.value = savedCss();
+  cssState();
+}
+function cssState(msg) {
+  const dirty = cssBox.value !== savedCss();
+  $('#btn-css-save').disabled = !dirty;
+  $('#btn-css-revert').disabled = !dirty;
+  $('#css-state').textContent = msg || (window.tickmarkCss?.disabled ? 'Not applied: the page was opened with ?nocss' : dirty ? 'Not saved yet' : '');
+}
+cssBox.addEventListener('input', debounce(() => { window.tickmarkCss?.apply(cssBox.value, { save: false }); cssState(); }, 200));
+cssBox.addEventListener('keydown', (e) => {
+  if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); cssBox.setRangeText('  ', cssBox.selectionStart, cssBox.selectionEnd, 'end'); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); $('#btn-css-save').click(); }
+});
+$('#btn-css-save').onclick = async () => {
+  try {
+    S.config = await api('PUT', '/api/config', { customCss: cssBox.value });
+    store.set('config', S.config);
+    applyCustomCss();
+    cssState('Saved');
+  } catch (e) { toast(e.message); }
+};
+$('#btn-css-revert').onclick = () => { cssBox.value = savedCss(); applyCustomCss(); cssState(); };
+// Leaving Settings with unsaved CSS puts the saved styles back.
+setDlg.addEventListener('close', () => { if (cssBox.value !== savedCss()) { cssBox.value = savedCss(); applyCustomCss(); } });
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1453,6 +1484,7 @@ async function boot() {
     S.openFolders = new Set(store.get('openFolders', []));
   }
   try { S.config = await api('GET', '/api/config'); store.set('config', S.config); } catch {}
+  if (S.config) applyCustomCss();
   try { S.sync = await api('GET', '/api/sync'); } catch {}
   await loadTree();
   connectEvents();

@@ -281,3 +281,16 @@ test('checked items move under a "Complete" heading, and back when unchecked', a
   assert.equal(fileCompleted('# X\n\n## Complete\n- [x] Done\n', 3), null, 'already there');
   assert.equal(check('```\n- [ ] code\n```\n', 1), null, 'never inside code blocks');
 });
+
+test('settings keep custom CSS and the move-completed switch', async () => {
+  const { Config } = await import('../server/config.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tickmark-cfg-'));
+  const c = new Config(dir);
+  assert.equal(c.get().moveCompleted, true, 'on by default');
+  assert.equal(c.get().customCss, '');
+  c.update({ customCss: ':root { --accent: hotpink; }', moveCompleted: false });
+  const again = new Config(dir).public();
+  assert.equal(again.customCss, ':root { --accent: hotpink; }');
+  assert.equal(again.moveCompleted, false);
+  assert.throws(() => c.update({ customCss: 'x'.repeat(100_001) }), /100 KB/);
+});
