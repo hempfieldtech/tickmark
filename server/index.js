@@ -289,6 +289,10 @@ const routes = {
     shares.moved(owner(user), String(body.from), String(body.to));
     return { ok: true, updated };
   },
+  // ---- the README, for Settings → Help
+  'GET /api/readme': () => {
+    try { return { markdown: fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8') }; } catch { return { markdown: null }; }
+  },
   // ---- public links
   'GET /api/shares': ({ user }) => {
     const blocker = shareBlocker(oidc.publicUrl);

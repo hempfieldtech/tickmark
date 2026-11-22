@@ -1133,7 +1133,7 @@ async function discover(box) {
 
 // The settings pane: a menu of sections. CalDAV accounts and Sync share one form and Save button;
 // the others act immediately (account, users) or have their own Save (single sign-on).
-const SECTIONS = { caldav: 'CalDAV accounts', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', shares: 'Public links' };
+const SECTIONS = { caldav: 'CalDAV accounts', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', help: 'Help', shares: 'Public links' };
 const setDlg = $('#dlg-settings');
 const isMulti = () => S.me?.mode === 'multi' && !!S.me.user;
 const isAdmin = () => isMulti() && !!S.me.user.admin;
@@ -1161,6 +1161,7 @@ function showSection(sec) {
   if (sec === 'sso') loadSso();
   if (sec === 'appearance') { renderThemes(); renderCssEditor(); renderBranding(); }
   if (sec === 'shares') loadShares();
+  if (sec === 'help') loadReadme();
 }
 setDlg.querySelectorAll('.set-nav [data-sec]').forEach((b) => (b.onclick = () => showSection(b.dataset.sec)));
 setDlg.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { e.preventDefault(); showSection(g.dataset.goto); } });
@@ -1208,6 +1209,32 @@ $('#themes').addEventListener('click', (e) => {
   renderThemes();
   $(`#themes .theme-opt[data-id="${b.dataset.id}"]`)?.focus();
 });
+
+// ---- Settings → Help: the README, rendered
+async function loadReadme() {
+  const box = $('#readme');
+  if (box.dataset.loaded) return;
+  try {
+    const { markdown } = await api('GET', '/api/readme');
+    if (!markdown) { box.innerHTML = '<p class="note">The README isn\'t available on this server.</p>'; return; }
+    cbIndex = 0;
+    box.innerHTML = marked.parse(markdown);
+    box.querySelectorAll('input').forEach((i) => (i.disabled = true));
+    box.querySelectorAll('a[href]').forEach((a) => {
+      const h = a.getAttribute('href');
+      if (h.startsWith('#')) { // in-page links: scroll within the settings pane
+        a.onclick = (e) => {
+          e.preventDefault();
+          const id = decodeURIComponent(h.slice(1));
+          [...box.querySelectorAll('h1,h2,h3,h4')].find((x) => slug(x.textContent) === id)?.scrollIntoView({ behavior: 'smooth' });
+        };
+      } else if (/^https?:/i.test(h)) { a.target = '_blank'; a.rel = 'noopener'; }
+      else a.href = `https://github.com/hempfieldtech/tickmark/blob/master/${h}`;
+    });
+    box.dataset.loaded = '1';
+  } catch (e) { box.innerHTML = `<p class="note err">${esc(e.message)}</p>`; }
+}
+const slug = (t) => t.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-');
 
 // ---- public links
 const shareDlg = $('#dlg-share');

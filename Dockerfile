@@ -16,7 +16,7 @@ ENV NODE_ENV=production \
 RUN apk add --no-cache tzdata
 
 WORKDIR /app
-COPY package.json ./
+COPY package.json README.md ./
 COPY server ./server
 COPY public ./public
 

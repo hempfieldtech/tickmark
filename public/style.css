@@ -423,3 +423,6 @@ details.card[open] summary { margin-bottom: 4px; }
 .md .folded-away { display: none !important; }
 @media (hover: none) { .md .fold { opacity: .6; } }
 @media (max-width: 760px) { .md .fold { left: -1.2em; } }
+.readme { font-size: 14px; }
+.readme table { font-size: 13px; }
+.readme .tag { cursor: default; }
