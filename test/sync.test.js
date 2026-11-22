@@ -98,6 +98,20 @@ test('bi-directional sync', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, asy
     assert.equal(d.model.done, true);
   });
 
+  await t.test('a todo that names its note goes back to that note', async () => {
+    const mk = async (uid, title, note) => client.put(calUrl + uid + '.ics',
+      buildTodo({ uid, model: { title, done: false, due: null, priority: 0, recur: null }, description: `From note: ${note}` }), { create: true });
+    await mk('from-1-' + Date.now(), 'Back to the plan', 'Projects/Plan.md');
+    await mk('from-2-' + Date.now(), 'Note is gone', 'Old/Someday.md');
+    await mk('from-3-' + Date.now(), 'Sneaky', '../../etc/passwd.md');
+    const r = await engine.run();
+    assert.equal(r.imported, 3);
+    assert.match(read('Projects/Plan.md'), /- \[ \] Back to the plan #task \^t\w+\n$/, 'existing note');
+    assert.equal(read('Someday.md').replace(/\^t\w+/, '^id'), '# Someday\n\n- [ ] Note is gone #task ^id\n', 'new note in the root');
+    assert.match(read('Inbox.md'), /- \[ \] Sneaky #task/, 'paths outside the vault go to the inbox');
+    assert.equal(fs.existsSync(path.join(dir, 'vault', 'Old')), false);
+  });
+
   await t.test('imports todos created on the server', async () => {
     const uid = 'remote-' + Date.now();
     await client.put(calUrl + uid + '.ics', buildTodo({ uid, model: { title: 'From phone', done: false, due: null, priority: 9 } }), { create: true });

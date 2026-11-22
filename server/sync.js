@@ -351,6 +351,19 @@ export class SyncEngine {
     // ---- 6. Import todos created on the CalDAV side
     const inbox = acct.inboxFile || 'Inbox.md';
     const tag = acct.itemTags[0];
+    // A todo that says which note it came from ("From note: Work/Plan.md", as Tickmark writes them)
+    // goes back to that note: where it is if it still exists, otherwise a new note of that name in
+    // the vault's root. Everything else goes to the inbox.
+    const noteFor = (r) => {
+      const p = r.fromNote?.replace(/\\/g, '/').replace(/^\/+/, '');
+      if (!p || p.split('/').some((x) => x === '..' || x.startsWith('.'))) return inbox;
+      try {
+        if (this.vault.exists(p)) return p;
+        const root = p.split('/').pop();
+        this.vault.resolve(root, { md: true });
+        return root;
+      } catch { return inbox; }
+    };
     for (const r of newRemote) {
       if (r.model.done && !r.reuseBid) continue; // don't flood the inbox with old completed todos
       const bid = r.reuseBid || newBlockId();
@@ -360,7 +373,8 @@ export class SyncEngine {
           etag = (await client.put(r.url, buildTodo({ existing: r.ics, uid: r.uid, model: r.model, tickmarkId: bid }), { etag: r.etag })).etag;
         }
         const line = buildTaskLine({ blockId: bid, syncTags: tag ? [tag] : [] }, r.model, { doneDate: r.doneDate });
-        addOp(inbox, { type: 'append', line, state: { block_id: bid, uid: r.uid, href: rel(r.url), etag, base: r.model, path: inbox } });
+        const note = noteFor(r);
+        addOp(note, { type: 'append', line, state: { block_id: bid, uid: r.uid, href: rel(r.url), etag, base: r.model, path: note } });
       } catch (e) {
         result.errors.push(`${r.model.title}: ${e.message}`);
       }
@@ -372,7 +386,7 @@ export class SyncEngine {
       this.vault.modify(path, (text) => {
         let lines = text.split('\n');
         if (!text) {
-          lines = ['# Inbox', ''];
+          lines = [`# ${path === inbox ? 'Inbox' : path.split('/').pop().replace(/\.md$/i, '')}`, ''];
           if (!tag && acct.sectionTags[0]) lines.push(`## From calendar #${acct.sectionTags[0]}`, '');
         }
         const keep = text ? 0 : lines.length; // don't trim the blank line under a fresh heading
