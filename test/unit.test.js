@@ -310,3 +310,12 @@ test('new lines go above a "Complete" section at the end of a note', async () =>
   assert.deepEqual(appendLines(['## Complete', '- [x] B', '## Later', '- [ ] D'], ['- [ ] C']),
     ['## Complete', '- [x] B', '## Later', '- [ ] D', '- [ ] C'], 'a Complete section that isn\'t last doesn\'t count');
 });
+
+test('open sub-items under an item', async () => {
+  const { openSubtasks } = await import('../public/shared/tasks.js');
+  const t = '- [ ] Pack\n  - [ ] Socks\n  - [x] Passport\n    - [ ] deep\n  notes\n- [ ] Next\n  - [ ] child';
+  assert.equal(openSubtasks(t, 0), 2);
+  assert.equal(openSubtasks(t, 2), 1);
+  assert.equal(openSubtasks(t, 5), 1);
+  assert.equal(openSubtasks('- [ ] Alone\n- [ ] Sibling', 0), 0);
+});

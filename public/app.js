@@ -1,5 +1,5 @@
 import { marked } from './vendor/marked.esm.js';
-import { checkboxLines, toggleLine, fileCompleted, parseTasks, normTag, localDate } from './shared/tasks.js';
+import { checkboxLines, toggleLine, fileCompleted, openSubtasks, parseTasks, normTag, localDate } from './shared/tasks.js';
 import { parseRecurrence, describeRecurrence } from './shared/recur.js';
 import { textStats } from './shared/words.js';
 
@@ -256,6 +256,14 @@ function setEditorText(text) {
 
 /** Check or uncheck an item; with "move completed" on, it also moves under/out of the "Complete" heading. */
 function toggleTask(text, lineNo) {
+  // A synced task can't be checked while it has unchecked sub-items.
+  if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[ \]/.test(text.split('\n')[lineNo] || '')) {
+    const open = openSubtasks(text, lineNo);
+    if (open && parseTasks(text, tagOpts()).some((t) => t.line === lineNo && t.synced)) {
+      toast(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`);
+      return text;
+    }
+  }
   const next = toggleLine(text, lineNo);
   if (next === text || S.config?.moveCompleted === false) return next;
   // A recurring item leaves a completed copy on the line below; that's the one to file away.

@@ -388,3 +388,18 @@ export function appendLines(lines, add, { keep = 0 } = {}) {
   while (at > keep && out[at - 1] === '') at--;
   return [...out.slice(0, at), ...add, '', ...out.slice(tail.i)];
 }
+
+/** How many unchecked checkbox sub-items (more indented, directly below) the item on `lineNo` has. */
+export function openSubtasks(text, lineNo) {
+  const lines = text.split('\n');
+  const indent = (l) => l.match(/^[ \t>]*/)[0].replace(/\t/g, '    ').length;
+  const base = indent(lines[lineNo] ?? '');
+  let open = 0;
+  for (let i = lineNo + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (!l.trim()) continue;
+    if (indent(l) <= base) break;
+    if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[ \]/.test(l)) open++;
+  }
+  return open;
+}

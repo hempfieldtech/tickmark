@@ -11,7 +11,7 @@
 // Several CalDAV accounts can be configured. Each synced item belongs to exactly one, chosen by
 // accountFor(); sync state is kept per account, so retagging an item moves it between accounts.
 
-import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted, appendLines } from '../public/shared/tasks.js';
+import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted, appendLines, openSubtasks } from '../public/shared/tasks.js';
 import { buildTodo, parseICS, findTodo, todoModel, occurrenceCompleted } from './ical.js';
 import { CalDAV } from './caldav.js';
 import { fingerprint } from './secrets.js';
@@ -137,7 +137,7 @@ export class SyncEngine {
         const a = accountFor(t, accounts);
         if (!a) continue;
         claimed.add(t.blockId);
-        local.get(a.id).set(t.blockId, { path: p, task: t, model: taskModel(t) });
+        local.get(a.id).set(t.blockId, { path: p, task: t, model: taskModel(t), openSubtasks: openSubtasks(content, t.line) });
       }
     }
 
@@ -306,6 +306,8 @@ export class SyncEngine {
         } else if (L && R) {
           const base = S?.base || null;
           let m = merge(L.model, R.model, base);
+          // Not done while it has unchecked sub-items in the note: completing it elsewhere is undone.
+          if (m.done && !L.model.done && L.openSubtasks) m = { ...m, done: false };
           // Completed elsewhere: a recurring todo moves on to its next date on both sides, and the
           // note keeps a completed copy as history.
           let history = null;

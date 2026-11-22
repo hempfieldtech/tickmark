@@ -112,6 +112,20 @@ test('bi-directional sync', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, asy
     assert.equal(fs.existsSync(path.join(dir, 'vault', 'Old')), false);
   });
 
+  await t.test('a task with unchecked sub-items stays open when completed elsewhere', async () => {
+    write('Projects/Trip.md', '- [ ] Pack #task\n  - [ ] Socks\n  - [x] Passport\n');
+    await engine.run();
+    await editRemote('Pack', { done: true });
+    await engine.run();
+    assert.match(read('Projects/Trip.md'), /^- \[ \] Pack #task \^t\w+\n/, 'still open in the note');
+    assert.equal((await byTitle('Pack')).model.done, false, 'and reopened on the server');
+    write('Projects/Trip.md', read('Projects/Trip.md').replace('- [ ] Socks', '- [x] Socks'));
+    await engine.run();
+    await editRemote('Pack', { done: true });
+    await engine.run();
+    assert.match(read('Projects/Trip.md'), /- \[x\] Pack #task/, 'completes once its sub-items are done');
+  });
+
   await t.test('imports todos created on the server', async () => {
     const uid = 'remote-' + Date.now();
     await client.put(calUrl + uid + '.ics', buildTodo({ uid, model: { title: 'From phone', done: false, due: null, priority: 9 } }), { create: true });
