@@ -1066,7 +1066,7 @@ async function discover(box) {
 
 // The settings pane: a menu of sections. CalDAV accounts and Sync share one form and Save button;
 // the others act immediately (account, users) or have their own Save (single sign-on).
-const SECTIONS = { caldav: 'CalDAV accounts', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', branding: 'Branding', shares: 'Public links' };
+const SECTIONS = { caldav: 'CalDAV accounts', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', shares: 'Public links' };
 const setDlg = $('#dlg-settings');
 const isMulti = () => S.me?.mode === 'multi' && !!S.me.user;
 const isAdmin = () => isMulti() && !!S.me.user.admin;
@@ -1092,8 +1092,7 @@ function showSection(sec) {
   setDlg.querySelectorAll('.set-main > [data-sec]').forEach((x) => (x.hidden = x.dataset.sec !== sec));
   if (sec === 'users') loadUsers();
   if (sec === 'sso') loadSso();
-  if (sec === 'appearance') { renderThemes(); renderCssEditor(); }
-  if (sec === 'branding') renderBranding();
+  if (sec === 'appearance') { renderThemes(); renderCssEditor(); renderBranding(); }
   if (sec === 'shares') loadShares();
 }
 setDlg.querySelectorAll('.set-nav [data-sec]').forEach((b) => (b.onclick = () => showSection(b.dataset.sec)));
@@ -1227,7 +1226,7 @@ function renderBranding() {
   $('#brand-name').value = b.customName ? b.name : '';
   const editable = canBrand();
   $('#brand-admin-note').hidden = editable;
-  for (const x of document.querySelectorAll('[data-sec="branding"] input, [data-sec="branding"] button')) x.disabled = !editable;
+  for (const x of document.querySelectorAll('.brand-pane input, .brand-pane button')) x.disabled = !editable;
   renderBrandImages();
   $('#btn-brand-reset').disabled = !editable || !(b.customName || b.hasLogo || b.hasFavicon);
   $('#brand-state').textContent = '';

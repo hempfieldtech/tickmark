@@ -32,11 +32,11 @@ mkdir -p vault data                 # create these yourself first, or Docker mak
 docker compose up -d --build        # http://127.0.0.1:8087, notes in ./vault, settings in ./data
 ```
 
-A ready-made image is published as `ghcr.io/hempfieldtech/tickmark:latest`, with each release also tagged by version (for example `:0.3.0`). Set `image:` to it in `compose.yaml` and drop `build:` to use it instead of building; pin a version tag if you want to choose when to upgrade. The image is built for amd64 and arm64 by GitHub Actions (`.github/workflows/docker.yml`): every push to `master` updates `:latest`, and pushing a `v1.2.3` tag publishes `:1.2.3` and `:1.2`, after the tests pass (including sync against a throwaway Radicale). In a fork it pushes to your own `ghcr.io/<you>/tickmark` with the built-in `GITHUB_TOKEN`; the comments at the top of the workflow say what to do if the push is denied.
+A ready-made image is published as `ghcr.io/hempfieldtech/tickmark:latest`, with each release also tagged by version (for example `:0.3.0`). `compose.example.yaml` runs it instead of building (`docker compose -f compose.example.yaml up -d`, or copy it next to your own `vault/` and `data/`); pin a version tag if you want to choose when to upgrade. The image is built for amd64 and arm64 by GitHub Actions (`.github/workflows/docker.yml`): every push to `master` updates `:latest`, and pushing a `v1.2.3` tag publishes `:1.2.3` and `:1.2`, after the tests pass (including sync against a throwaway Radicale). In a fork it pushes to your own `ghcr.io/<you>/tickmark` with the built-in `GITHUB_TOKEN`; the comments at the top of the workflow say what to do if the push is denied.
 
 Edit `compose.yaml` to point `./vault` at an existing notes folder or set your timezone (`TZ`). The container runs as uid 1000 by default; set `UID`/`GID` if your files belong to someone else.
 
-Local settings go in a `.env` file next to `compose.yaml` (git ignores it). Compose reads it, and so does the container:
+Local settings go in a `.env` file next to `compose.yaml` (git ignores it). Compose reads it, and so does the container. `.env.example` lists every setting with a short explanation; copy it to `.env` and uncomment what you need:
 
 ```sh
 TICKMARK_BIND=0.0.0.0            # reachable from your network, not just this machine; turn on sign-in first
@@ -186,7 +186,29 @@ Source / split / preview (Ctrl+E cycles). Preview checkboxes are clickable and e
 
 **Public links.** A note's **⋯** menu, or a folder's menu in the sidebar, → **Share…** makes a read-only link anyone can open without signing in (a folder link shows every note in it, including ones added later, and `[[links]]` between them work). Links follow renames, stop when the note goes to the trash, and are listed under Settings → **Public links**, where you can stop sharing. They're only offered when `TICKMARK_PUBLIC_URL` is a domain name (not an IP address or localhost), and links are built from it. Raw HTML in shared notes shows as text.
 
-Settings → **Appearance** has themes (per device) and **custom CSS** (per user, on every device; open Tickmark with `?nocss` to load it without). Settings → **Branding** sets the name, logo and favicon everyone sees, including on the sign-in screen and as the installed app (admins only once sign-in is on).
+Settings → **Appearance** has themes (per device) and **custom CSS** (per user, on every device; open Tickmark with `?nocss` to load it without). Settings → Appearance → **Branding** sets the name, logo and favicon everyone sees, including on the sign-in screen and as the installed app (admins only once sign-in is on).
+
+Custom CSS can restyle anything, but the theme colours and fonts all come from these variables on `:root`, so overriding them is usually enough (e.g. `:root { --accent: hotpink; }`). Each theme sets them under `[data-theme="…"]`; to change one theme only, use that selector (`:root[data-theme="dark"] { … }`).
+
+| Variable | What it colours / sets |
+|---|---|
+| `--bg` | page background, editor and preview |
+| `--panel` | sidebar, settings navigation, top bar of shared pages |
+| `--surface` | dialogs, menus, cards, checkboxes |
+| `--line` | borders and dividers |
+| `--text` | main text |
+| `--muted` | secondary text: hints, dates, completed items |
+| `--accent` | links, buttons, checked boxes, the active item |
+| `--accent-soft` | background behind the active item, selected tags |
+| `--danger` | delete buttons, errors, overdue dates |
+| `--warn` | warnings, "offline" save status |
+| `--mark` | search highlights (`<mark>`) |
+| `--code-bg` | code blocks and inline code |
+| `--radius` | corner rounding (`8px`; Terminal uses `0`) |
+| `--sans` | interface and preview font |
+| `--mono` | editor and code font |
+
+Useful selectors: `#editor` (the source editor), `#preview` / `.md` (rendered notes), `#sidebar`, `#tree`, `.tag`, `.task-cb` (checkboxes), `.done-item`, `.cancelled-item`, `.progress-item`, `.due.overdue`.
 
 | Key | |
 |---|---|

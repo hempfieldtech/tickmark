@@ -8,6 +8,7 @@
   <script src="/theme.js"></script>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
@@ -65,8 +66,8 @@
           <article id="preview" class="md"></article>
           <div id="backlinks"></div>
         </div>
-        <div id="word-count" aria-live="off" hidden></div>
       </section>
+      <footer id="word-count" aria-live="off" hidden></footer>
     </main>
   </div>
 
@@ -74,14 +75,13 @@
     <div class="set-wrap">
       <nav class="set-nav" aria-label="Settings sections">
         <h2>Settings</h2>
-        <button type="button" data-sec="caldav">CalDAV accounts</button>
-        <button type="button" data-sec="account">Your account</button>
-        <button type="button" data-sec="users">Users</button>
-        <button type="button" data-sec="sso">Single sign-on</button>
         <button type="button" data-sec="appearance">Appearance</button>
-        <button type="button" data-sec="branding">Branding</button>
-        <button type="button" data-sec="shares">Public links</button>
+        <button type="button" data-sec="caldav">CalDAV accounts</button>
         <button type="button" id="nav-deleted" title="Synced tasks deleted from any note">Deleted tasks…</button>
+        <button type="button" data-sec="shares">Public links</button>
+        <button type="button" data-sec="sso">Single sign-on</button>
+        <button type="button" data-sec="users">Users</button>
+        <button type="button" data-sec="account">Your account</button>
       </nav>
       <div class="set-main">
         <header class="set-head">
@@ -125,9 +125,8 @@
               <span class="note" id="css-state"></span>
             </div>
           </div>
-        </section>
-
-        <section data-sec="branding" class="set-body">
+          <h4 class="sub-head" id="branding">Branding</h4>
+          <div class="brand-pane">
           <p class="note">The name and pictures this Tickmark shows everyone: in the sidebar, on the sign-in screen, in browser tabs, and as the installed app.
             <span id="brand-admin-note" hidden>Only admins can change them.</span></p>
           <label>Name <input id="brand-name" maxlength="40" placeholder="Tickmark" autocomplete="off"></label>
@@ -147,7 +146,9 @@
           </div>
           <div class="row"><button type="button" id="btn-brand-save" class="btn primary">Save</button>
             <button type="button" id="btn-brand-reset" class="btn">Reset all to default</button><span class="note" id="brand-state"></span></div>
+          </div>
         </section>
+
 
         <section data-sec="shares" class="set-body">
           <p class="note">Notes and folders you've shared. Anyone with a link can read what it points to (for a folder, every note in it,

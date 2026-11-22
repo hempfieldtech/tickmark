@@ -169,7 +169,9 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 
 #workspace { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; position: relative; }
-#word-count { position: absolute; left: 10px; bottom: 8px; padding: 2px 8px; border-radius: 6px; background: var(--bg); color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; pointer-events: none; opacity: .85; }
+/* A thin status bar under the note, so the count never covers its content ("Linked from" and all). */
+#word-count { flex: none; padding: 3px 14px calc(3px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+#word-count[hidden] { display: none; }
 .view-edit #workspace, .view-read #workspace { grid-template-columns: 1fr; }
 .view-edit #preview-wrap, .view-read #editor { display: none !important; }
 .empty { grid-column: 1 / -1; display: grid; place-content: center; text-align: center; color: var(--muted); padding: 24px; }
@@ -408,3 +410,4 @@ details.card[open] summary { margin-bottom: 4px; }
 .task-cb[data-state="cancelled"]:checked { background: var(--muted); border-color: var(--muted); }
 .task-cb[data-state="cancelled"]:checked::after { content: "✕"; width: auto; height: auto; border: 0; transform: none; color: var(--surface); font-size: 11px; line-height: 1; font-weight: 700; }
 .md li.cancelled-item { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+.brand-pane { display: grid; gap: 12px; }

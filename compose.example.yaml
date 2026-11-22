@@ -1,0 +1,21 @@
+# Run the published image instead of building from source:
+#   mkdir -p vault data && cp .env.example .env    # edit .env as needed
+#   docker compose -f compose.example.yaml up -d     # http://127.0.0.1:8087
+# (Or copy this file to compose.yaml somewhere else, next to your own vault/ and data/ folders.)
+services:
+  tickmark:
+    # :latest follows every release; pin a version (e.g. :0.3.0, or :0.3 for its fixes) to choose when to upgrade.
+    image: ghcr.io/hempfieldtech/tickmark:latest
+    container_name: tickmark
+    restart: unless-stopped
+    user: "${UID:-1000}:${GID:-1000}"   # must own ./vault and ./data
+    ports:
+      - "${TICKMARK_BIND:-127.0.0.1}:8087:8087"
+    environment:
+      TZ: ${TZ:-Etc/UTC}
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./vault:/vault   # your .md notes; point this at an existing folder if you like
+      - ./data:/data     # settings, users, sessions, search index

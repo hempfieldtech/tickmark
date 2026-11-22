@@ -100,6 +100,8 @@ export class Branding {
     const favType = this.data.favicon?.type || this.data.logo?.type || 'image/svg+xml';
     return src
       .replace('<title>Tickmark</title>', `<title>${esc(b.name)}</title>`)
+      // The default PNG icon goes: browsers would otherwise prefer it over a custom favicon.
+      .replace(/\s*<link rel="icon" href="\/icons\/icon-192\.png"[^>]*>/, '')
       .replace(/<link rel="icon" href="[^"]*" type="[^"]*">/, `<link rel="icon" href="${esc(b.favicon)}" type="${esc(favType)}">`)
       .replace(/<link rel="apple-touch-icon" href="[^"]*">/, `<link rel="apple-touch-icon" href="${esc(b.hasLogo ? b.logo : '/icons/icon-192.png')}">`)
       .replace(/<span class="brand"><img src="[^"]*"/g, `<span class="brand"><img src="${esc(b.logo)}"`)
