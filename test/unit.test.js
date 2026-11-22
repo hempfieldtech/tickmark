@@ -193,6 +193,8 @@ test('a restored line goes at the end of its section', async () => {
     ['## Groceries #sync', '- [ ] Eggs', '', '### Dairy', '- [ ] Butter', '- [ ] Milk', ''], 'after subsections, before the next same-level heading');
   assert.deepEqual(insertInSection(lines, 'Chores', '- [ ] Dust').slice(-3), ['- [ ] Vacuum', '- [ ] Dust', '']);
   assert.equal(insertInSection(lines, 'Garden', '- [ ] Mow'), null);
+  assert.ok(insertInSection(['# Home', '### groceries', '- [ ] Eggs'], 'Groceries', 'x'), 'level and case don\'t matter');
+  assert.ok(insertInSection(['## **Groceries** #sync', '- [ ] Eggs'], 'Groceries', 'x'), 'nor formatting');
   assert.equal(insertInSection(['```', '## Groceries', '```'], 'Groceries', 'x'), null, 'headings in code blocks don’t count');
 });
 
@@ -298,4 +300,13 @@ test('settings keep custom CSS and the move-completed switch', async () => {
 test('an empty checkbox is not synced (and gets no block id) until it has text', () => {
   const text = '## Groceries #sync\n- [ ] \n- [ ]\n- [ ] #task\n- [ ] Milk\n';
   assert.deepEqual(parseTasks(text, opts).map((t) => [t.title, t.synced]), [['', false], ['', false], ['', false], ['Milk', true]]);
+});
+
+test('new lines go above a "Complete" section at the end of a note', async () => {
+  const { appendLines } = await import('../public/shared/tasks.js');
+  assert.deepEqual(appendLines(['# Inbox', '- [ ] A', '', '## Complete', '- [x] B', ''], ['- [ ] C']),
+    ['# Inbox', '- [ ] A', '- [ ] C', '', '## Complete', '- [x] B', '']);
+  assert.deepEqual(appendLines(['# Inbox', '- [ ] A', '', ''], ['- [ ] C']), ['# Inbox', '- [ ] A', '- [ ] C']);
+  assert.deepEqual(appendLines(['## Complete', '- [x] B', '## Later', '- [ ] D'], ['- [ ] C']),
+    ['## Complete', '- [x] B', '## Later', '- [ ] D', '- [ ] C'], 'a Complete section that isn\'t last doesn\'t count');
 });

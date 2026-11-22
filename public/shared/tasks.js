@@ -153,6 +153,12 @@ export function sectionName(headingText) {
   return headingText.replace(TAG, '$1').replace(/\s+/g, ' ').trim();
 }
 
+/** Whether two headings are "the same" for putting tasks back: level, case, spacing and **formatting** don't matter. */
+export function sameSection(a, b) {
+  const norm = (x) => String(x ?? '').replace(/[*_`~]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return norm(a) === norm(b);
+}
+
 /**
  * Insert `line` at the end of the section under the heading named `section` (as in a task's `section`),
  * before any trailing blank lines. Returns the new lines, or null if no such heading exists.
@@ -170,7 +176,7 @@ export function insertInSection(lines, section, line) {
       while (at > start + 1 && lines[at - 1].trim() === '') at--;
       return [...lines.slice(0, at), line, ...lines.slice(at)];
     }
-    if (start < 0 && sectionName(h[2]) === section) { start = i; level = h[1].length; }
+    if (start < 0 && sameSection(sectionName(h[2]), section)) { start = i; level = h[1].length; }
   }
   if (start < 0) return null;
   let at = lines.length;
@@ -355,4 +361,30 @@ export function fileCompleted(text, lineNo) {
   if (!left) out.splice(at, own.i + 1 - at);
   out.splice(at, 0, ...block);
   return out.join('\n');
+}
+
+/**
+ * Add lines at the end of a note's own content: before a "Complete" section that runs to the end of
+ * the note (so new tasks don't land among finished ones), otherwise at the very end.
+ * `keep` lines at the top are never trimmed (e.g. the blank line under a fresh heading).
+ */
+export function appendLines(lines, add, { keep = 0 } = {}) {
+  const out = [...lines];
+  const heads = [];
+  let fence = null;
+  for (let i = 0; i < out.length; i++) {
+    const f = out[i].match(FENCE);
+    if (fence) { if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null; continue; }
+    if (f) { fence = f[1]; continue; }
+    const h = out[i].match(HEADING);
+    if (h) heads.push({ i, level: h[1].length, name: sectionName(h[2]) });
+  }
+  const tail = heads.find((h, k) => sameSection(h.name, COMPLETE_HEADING) && !heads.slice(k + 1).some((x) => x.level <= h.level));
+  if (!tail) {
+    while (out.length > keep && out.at(-1) === '') out.pop();
+    return [...out, ...add];
+  }
+  let at = tail.i;
+  while (at > keep && out[at - 1] === '') at--;
+  return [...out.slice(0, at), ...add, '', ...out.slice(tail.i)];
 }

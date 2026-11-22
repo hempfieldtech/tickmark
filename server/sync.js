@@ -11,7 +11,7 @@
 // Several CalDAV accounts can be configured. Each synced item belongs to exactly one, chosen by
 // accountFor(); sync state is kept per account, so retagging an item moves it between accounts.
 
-import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted } from '../public/shared/tasks.js';
+import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted, appendLines } from '../public/shared/tasks.js';
 import { buildTodo, parseICS, findTodo, todoModel, occurrenceCompleted } from './ical.js';
 import { CalDAV } from './caldav.js';
 import { fingerprint } from './secrets.js';
@@ -200,9 +200,9 @@ export class SyncEngine {
         if (!placed && e.section) {
           into = RESTORED;
           placed = insertInSection(lines, RESTORED, line);
-          if (!placed) { const l = [...lines]; while (l.length && !l.at(-1).trim()) l.pop(); placed = [...l, '', `## ${RESTORED}`, line]; }
+          if (!placed) placed = appendLines(lines, ['', `## ${RESTORED}`, line]);
         }
-        const out = placed || [...lines, line];
+        const out = placed || appendLines(lines, [line]);
         const last = i === candidates.length - 1;
         if (last || parseTasks(out.join('\n'), allTags).some((t) => t.blockId === bid && t.synced)) {
           section = placed ? into : null;
@@ -393,10 +393,10 @@ export class SyncEngine {
         const tasks = new Map(parseTasks(lines.join('\n'), tagOpts).filter((t) => t.blockId).map((t) => [t.blockId, t]));
         const remove = new Set();
         const insertAfter = new Map(); // line → extra line (recurring history)
+        const appends = [];
         for (const op of ops) {
-          if (op.type === 'append') {
-            while (lines.length > keep && lines.at(-1) === '') lines.pop();
-            lines.push(op.line);
+          if (op.type === 'append') { // added after the other edits, which go by line number
+            appends.push(op.line);
             applied.push(op);
             result.imported++;
             continue;
@@ -418,6 +418,7 @@ export class SyncEngine {
         if (remove.size || insertAfter.size) {
           lines = lines.flatMap((l, i) => (remove.has(i) ? [] : insertAfter.has(i) ? [l, insertAfter.get(i)] : [l]));
         }
+        if (appends.length) lines = appendLines(lines, appends, { keep });
         if (!applied.length) return null;
         let out = lines.join('\n');
         // Checked or unchecked in a task app: file it under (or back out of) the "Complete" heading,
