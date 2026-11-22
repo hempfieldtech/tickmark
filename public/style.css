@@ -55,6 +55,37 @@
   --danger: #f28b82; --warn: #fdd663; --mark: #4a3f10; --code-bg: #17181b;
   color-scheme: dark;
 }
+[data-theme="dracula"] {
+  --bg: #282a36; --panel: #21222c; --surface: #2f3141; --line: #44475a;
+  --text: #f8f8f2; --muted: #a2abcc; --accent: #bd93f9; --accent-soft: #3f3a5c;
+  --danger: #ff6e6e; --warn: #f1fa8c; --mark: #5b5a24; --code-bg: #303241;
+  color-scheme: dark;
+}
+/* Catppuccin, its four flavours (https://catppuccin.com/palette): Latte is light, the rest dark. */
+[data-theme="catppuccin-latte"] {
+  --bg: #eff1f5; --panel: #e6e9ef; --surface: #f8f9fb; --line: #ccd0da;
+  --text: #4c4f69; --muted: #6c6f85; --accent: #8839ef; --accent-soft: #e7dcfc;
+  --danger: #d20f39; --warn: #b8690a; --mark: #f5e1b0; --code-bg: #e6e9ef;
+  color-scheme: light;
+}
+[data-theme="catppuccin-frappe"] {
+  --bg: #303446; --panel: #292c3c; --surface: #363a4f; --line: #414559;
+  --text: #c6d0f5; --muted: #a5adce; --accent: #ca9ee6; --accent-soft: #4a4462;
+  --danger: #e78284; --warn: #e5c890; --mark: #5d5236; --code-bg: #353a4d;
+  color-scheme: dark;
+}
+[data-theme="catppuccin-macchiato"] {
+  --bg: #24273a; --panel: #1e2030; --surface: #2b2f45; --line: #363a4f;
+  --text: #cad3f5; --muted: #a5adcb; --accent: #c6a0f6; --accent-soft: #3f3a5e;
+  --danger: #ed8796; --warn: #eed49f; --mark: #554a30; --code-bg: #2a2e44;
+  color-scheme: dark;
+}
+[data-theme="catppuccin-mocha"] {
+  --bg: #1e1e2e; --panel: #181825; --surface: #262637; --line: #313244;
+  --text: #cdd6f4; --muted: #a6adc8; --accent: #cba6f7; --accent-soft: #3b3452;
+  --danger: #f38ba8; --warn: #f9e2af; --mark: #574a2c; --code-bg: #24243a;
+  color-scheme: dark;
+}
 [data-theme="terminal"] {
   --bg: #050a05; --panel: #030703; --surface: #0a120a; --line: #1d3a1d;
   --text: #4cff6a; --muted: #2fa344; --accent: #9dff9d; --accent-soft: #123312;

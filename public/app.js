@@ -233,7 +233,9 @@ async function openLink(target) {
   if (f) return open(f.path);
   const name = target.replace(/[#^].*$/, '').trim();
   if (!name) return;
-  const path = (/\.md$/i.test(name) ? name : name + '.md').replace(/^\/+/, '');
+  const file = (/\.md$/i.test(name) ? name : name + '.md');
+  // [[Name]] makes the note next to the one linking to it; [[Folder/Name]] and [[/Name]] are from the vault's root.
+  const path = /\//.test(file) || !S.path ? file.replace(/^\/+/, '') : joinPath(dirname(S.path), file);
   try { await api('POST', '/api/file', { path, content: '' }); } catch (e) { if (e.status !== 409) return toast(e.message); }
   await loadTree();
   open(path);
@@ -668,6 +670,7 @@ function treeMenu(row, anchor) {
     items.push({ label: 'New folder here', run: () => newFolder(folder) });
   }
   items.push({ label: 'Rename…', run: () => renamePath(path, folder != null) });
+  items.push({ label: 'Move to folder…', run: () => moveToFolder(path) });
   items.push({ label: 'Share…', run: () => openShare(path, folder != null) });
   items.push({ label: 'Move to trash', danger: true, run: () => trashPath(path, folder != null) });
   showMenu(anchor, items);
@@ -712,6 +715,14 @@ async function movePath(from, to) {
     if (r.updated?.includes(S.path)) reloadIfClean();
     await loadTree();
   } catch (e) { toast(e.message); }
+}
+
+async function moveToFolder(path) {
+  const dest = await ask('Move to folder (blank = vault root)', dirname(path));
+  if (dest === null) return;
+  const dir = dest.replace(/^\/+|\/+$/g, '');
+  if (dir === path || dir.startsWith(path + '/')) return toast("A folder can't go inside itself");
+  if (dir !== dirname(path)) await movePath(path, joinPath(dir, path.split('/').pop()));
 }
 
 async function renamePath(path, isFolder) {
@@ -782,10 +793,6 @@ $('#btn-more').onclick = (e) => {
   showMenu(e.currentTarget, [
     ...(note ? [
       { label: 'Rename', run: () => { el.title.focus(); el.title.select(); } },
-      { label: 'Move to folder…', run: async () => {
-        const dest = await ask('Move to folder (blank = vault root)', dirname(S.path));
-        if (dest !== null) await movePath(S.path, joinPath(dest.replace(/^\/+|\/+$/g, ''), S.path.split('/').pop()));
-      } },
     ] : []),
     ...(note ? [{ label: 'Share…', run: () => openShare(S.path, false) }] : []),
     { label: 'Sync now', run: () => runSync({ manual: true }) },
@@ -1041,7 +1048,10 @@ const THEMES = [
   ['system', 'System', 'Light or dark, following your device'],
   ['light', 'Light'], ['dark', 'Dark'], ['sepia', 'Sepia'],
   ['solarized-light', 'Solarized Light'], ['solarized-dark', 'Solarized Dark'],
-  ['nord', 'Nord'], ['midnight', 'Midnight', 'Pure black, for OLED screens'],
+  ['nord', 'Nord'], ['dracula', 'Dracula'],
+  ['catppuccin-latte', 'Catppuccin Latte'], ['catppuccin-frappe', 'Catppuccin Frappé'],
+  ['catppuccin-macchiato', 'Catppuccin Macchiato'], ['catppuccin-mocha', 'Catppuccin Mocha'],
+  ['midnight', 'Midnight', 'Pure black, for OLED screens'],
   ['terminal', 'Terminal', 'Green phosphor console'],
 ];
 const swatch = (t) => `<span class="sw" data-theme="${t}"><span class="sw-side"></span><span class="sw-main">` +
@@ -1147,6 +1157,7 @@ function renderBranding() {
   $('#brand-admin-note').hidden = editable;
   for (const x of document.querySelectorAll('[data-sec="branding"] input, [data-sec="branding"] button')) x.disabled = !editable;
   renderBrandImages();
+  $('#btn-brand-reset').disabled = !editable || !(b.customName || b.hasLogo || b.hasFavicon);
   $('#brand-state').textContent = '';
 }
 function renderBrandImages() {
@@ -1175,6 +1186,14 @@ for (const card of document.querySelectorAll('.brand-img')) {
     r.readAsDataURL(f);
   };
 }
+$('#btn-brand-reset').onclick = async () => {
+  if (!confirm('Put back the Tickmark name, logo and favicon for everyone?')) return;
+  try {
+    applyBranding(await api('PUT', '/api/branding', { name: '', logo: null, favicon: null }));
+    renderBranding();
+    $('#brand-state').textContent = 'Back to the defaults';
+  } catch (e) { toast(e.message); }
+};
 $('#btn-brand-save').onclick = async () => {
   try {
     const b = await api('PUT', '/api/branding', { name: $('#brand-name').value, ...brandDraft });
