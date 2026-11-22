@@ -151,6 +151,13 @@ test('bi-directional sync', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, asy
     assert.equal((await engine.run()).pushed, 0, 'only once');
   });
 
+  await t.test('notes in the Templates folder never sync', async () => {
+    write('Templates/Weekly.md', '# Week of {{date}}\n- [ ] Plan the week #task\n');
+    await engine.run();
+    assert.equal(await byTitle('Plan the week'), undefined);
+    assert.equal(read('Templates/Weekly.md'), '# Week of {{date}}\n- [ ] Plan the week #task\n', 'no block id either');
+  });
+
   await t.test('imports todos created on the server', async () => {
     const uid = 'remote-' + Date.now();
     await client.put(calUrl + uid + '.ics', buildTodo({ uid, model: { title: 'From phone', done: false, due: null, priority: 9 } }), { create: true });

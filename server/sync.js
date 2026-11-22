@@ -45,6 +45,9 @@ export function accountFor(task, accounts) {
   return null;
 }
 
+export const TEMPLATES = 'Templates';
+export const isTemplate = (p) => p.toLowerCase().startsWith(TEMPLATES.toLowerCase() + '/');
+
 /** Heading for restored tasks whose own heading no longer exists. */
 const RESTORED = 'Restored tasks';
 const emptyResult = () => ({ pushed: 0, pulled: 0, created: 0, imported: 0, deletedRemote: 0, deletedLocal: 0, trashed: 0, errors: [], importedNotes: [] });
@@ -99,7 +102,8 @@ export class SyncEngine {
     // ---- 1. Local: make sure the index is current, move completed recurring items on to their next
     //         date, then give every synced item a unique block id.
     this.index.scan(this.vault);
-    const paths = this.index.pathsWithSyncedTasks().filter((p) => this.vault.exists(p)).sort();
+    // Notes in the Templates folder are blueprints: their checklist items never sync.
+    const paths = this.index.pathsWithSyncedTasks().filter((p) => !isTemplate(p) && this.vault.exists(p)).sort();
     const seen = new Set();
     const today = localDate(new Date());
     for (const p of paths) {

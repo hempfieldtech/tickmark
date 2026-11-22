@@ -215,7 +215,7 @@ function renderPreview() {
   el.preview.querySelectorAll('input.task-cb').forEach((cb, i) => (cb.dataset.i = i));
 
   const lines = checkboxLines(text);
-  const synced = new Set(parseTasks(text, tagOpts()).filter((t) => t.synced).map((t) => t.line));
+  const synced = new Set(isTemplate(S.path) ? [] : parseTasks(text, tagOpts()).filter((t) => t.synced).map((t) => t.line));
   el.preview.querySelectorAll('input.task-cb').forEach((cb) => {
     const line = lines[+cb.dataset.i];
     const li = cb.closest('li');
@@ -1039,6 +1039,8 @@ $('#btn-more').onclick = (e) => {
       { label: 'Rename', run: () => { el.title.focus(); el.title.select(); } },
     ] : []),
     ...(note ? [{ label: 'Share…', run: () => openShare(S.path, false) }] : []),
+    ...(note ? [{ label: 'Apply template…', run: () => applyTemplateMenu() }] : []),
+    ...(note && !isTemplate(S.path) ? [{ label: 'Save as template…', run: () => saveAsTemplate() }] : []),
     { label: 'Sync now', run: () => runSync({ manual: true }) },
     ...(note ? [{ label: 'Deleted tasks in this note…', run: () => openDeleted({ path: S.path }) }] : [{ label: 'Deleted tasks…', run: () => openDeleted() }]),
     { label: 'Theme…', run: () => openSettings('appearance') },
@@ -1380,6 +1382,52 @@ async function loadReadme() {
   } catch (e) { box.innerHTML = `<p class="note err">${esc(e.message)}</p>`; }
 }
 const slug = (t) => t.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-');
+
+// ---- note templates: notes in the Templates folder (their checklist items never sync)
+const TEMPLATES = 'Templates';
+const isTemplate = (p) => !!p && p.toLowerCase().startsWith(TEMPLATES.toLowerCase() + '/');
+function fillTemplate(text) {
+  const now = new Date();
+  const vars = {
+    date: localDate(now), time: now.toTimeString().slice(0, 5), title: basename(S.path || ''),
+    datetime: `${localDate(now)} ${now.toTimeString().slice(0, 5)}`,
+  };
+  return text.replace(/\{\{\s*(date|time|datetime|title)\s*\}\}/gi, (_, k) => vars[k.toLowerCase()]);
+}
+function applyTemplateMenu() {
+  const list = S.files.filter((f) => isTemplate(f.path)).sort((a, b) => a.path.localeCompare(b.path));
+  if (!list.length) return toast(`No templates yet. Put notes in a “${TEMPLATES}” folder, or use Save as template.`);
+  showMenu($('#btn-more'), list.map((f) => ({ label: f.path.slice(TEMPLATES.length + 1).replace(/\.md$/i, ''), run: () => applyTemplate(f.path) })));
+}
+async function applyTemplate(path) {
+  let text;
+  try { text = fillTemplate((await api('GET', `/api/file?path=${enc(path)}`)).content); } catch (e) { return toast(e.message); }
+  const ed = el.editor, cur = ed.value;
+  // An empty note (or one with only its title heading) takes the template whole; otherwise it goes in at the cursor.
+  if (!cur.trim() || /^#\s[^\n]*\n*$/.test(cur)) {
+    const keepTitle = /^#\s/.test(cur) && !/^#\s/.test(text) ? cur.replace(/\n*$/, '\n\n') : '';
+    applyEdit(keepTitle + text);
+  } else {
+    const at = ed.selectionStart ?? cur.length;
+    replaceRange(at, ed.selectionEnd ?? at, text);
+  }
+  toast(`Applied “${basename(path)}”`);
+}
+async function saveAsTemplate() {
+  const name = await ask('Template name', basename(S.path));
+  if (!name?.trim() || /[\\/]/.test(name)) return;
+  const path = `${TEMPLATES}/${name.trim()}.md`;
+  await flushSave();
+  try {
+    await api('POST', '/api/file', { path, content: el.editor.value });
+  } catch (e) {
+    if (e.status !== 409) return toast(e.message);
+    if (!confirm(`Replace the template “${name.trim()}”?`)) return;
+    try { await api('PUT', `/api/file?path=${enc(path)}`, { content: el.editor.value }); } catch (e2) { return toast(e2.message); }
+  }
+  await loadTree();
+  toast(`Saved as template “${name.trim()}”. Use {{date}}, {{time}} or {{title}} in it to fill those in.`);
+}
 
 // ---- public links
 const shareDlg = $('#dlg-share');
