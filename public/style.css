@@ -388,8 +388,8 @@ details.card[open] summary { margin-bottom: 4px; }
   .set-foot { margin: 4px -16px 0; padding: 10px 16px 14px; }
 }
 .row.between { justify-content: space-between; align-items: center; }
-.dlg label.check { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding-bottom: 8px; color: var(--text); }
-.dlg label.check input { width: auto; }
+.dlg label.check { display: flex; flex: 0 0 auto; align-items: baseline; gap: 6px; padding-bottom: 8px; color: var(--text); }
+.dlg label.check input { width: auto; flex: none; }
 #accounts { display: grid; gap: 12px; }
 .dlg fieldset.account { background: var(--bg); }
 .dlg fieldset.account input, .dlg fieldset.account select { background: var(--surface); }
@@ -438,6 +438,7 @@ details.card[open] summary { margin-bottom: 4px; }
 .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: 5px; }
 .menu button:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
 .menu button.danger { color: var(--danger); }
+.menu > hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
 #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0; transition: .2s; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 14px; pointer-events: none; max-width: calc(100vw - 32px); z-index: 60; }
 #toast.show { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
 #toast button { margin-left: 10px; border: 0; background: none; color: inherit; font-weight: 700; text-decoration: underline; }
@@ -610,6 +611,8 @@ details.card[open] summary { margin-bottom: 4px; }
 .set-nav .nav-logout[hidden] { display: none; }
 @media (max-width: 760px) { .set-nav .nav-logout { margin-top: 0; margin-left: auto; } }
 .dlg label.check .note { display: inline; }
+.dlg label.check > span { min-width: 0; }
+.dlg label.check .check-title { white-space: nowrap; }
 
 /* Help: the README with its contents as a tree */
 .help-dlg { width: min(1100px, calc(100vw - 32px)); height: min(820px, calc(100dvh - 32px)); max-height: none; overflow: hidden; }

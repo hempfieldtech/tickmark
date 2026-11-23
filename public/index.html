@@ -195,10 +195,10 @@
 
         <section data-sec="editor" class="set-body">
           <p class="note">How the editor behaves on this device.</p>
-          <label class="check"><input type="checkbox" id="opt-vim"> Vim mode
-            <span class="note">(normal, insert and visual modes, motions, operators, counts, text objects, search, marks and <code>:</code> commands; the bottom bar shows the mode)</span></label>
-          <label class="check"><input type="checkbox" id="opt-lines"> Line numbers
-            <span class="note">(beside the text, and the note's line count in the bottom bar)</span></label>
+          <label class="check"><input type="checkbox" id="opt-vim"><span><span class="check-title">Vim mode</span>
+            <span class="note">(normal, insert and visual modes, motions, operators, counts, text objects, search, marks and <code>:</code> commands; the bottom bar shows the mode)</span></span></label>
+          <label class="check"><input type="checkbox" id="opt-lines"><span><span class="check-title">Line numbers</span>
+            <span class="note">(beside the text, and the note's line count in the bottom bar)</span></span></label>
         </section>
 
         <section data-sec="about" class="set-body">
@@ -314,8 +314,8 @@
               </div>
               <p class="note">Comma-separated. Admin rights follow the admin groups at every sign-in.</p>
               <label class="check"><input type="checkbox" data-k="TICKMARK_OIDC_AUTO_CREATE" data-default="true"> Create an account the first time someone signs in</label>
-              <label class="check"><input type="checkbox" data-k="TICKMARK_OIDC_MATCH_USERNAME" data-default="false"> Link a first SSO sign-in to an existing user with the same name
-                <span class="note">(only if you control user names at the provider)</span></label>
+              <label class="check"><input type="checkbox" data-k="TICKMARK_OIDC_MATCH_USERNAME" data-default="false"><span>Link a first SSO sign-in to an existing user with the same name
+                <span class="note">(only if you control user names at the provider)</span></span></label>
               <label class="check"><input type="checkbox" data-k="TICKMARK_LOCAL_LOGIN" data-default="true"> Allow password sign-in too</label>
             </div>
             <details class="card">

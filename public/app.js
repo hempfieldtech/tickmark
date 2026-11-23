@@ -70,11 +70,14 @@ function toast(msg, action) {
   toast.t = setTimeout(() => el.toast.classList.remove('show'), action ? 7000 : 3200);
 }
 
-/** A menu of { label, run, danger } items. An item with `expand(button)` grows inside the menu instead of closing it. */
+/** A menu of { label, run, danger } items. Destructive (danger) items always go last, after a divider.
+ *  An item with `expand(button)` grows inside the menu instead of closing it. */
 function showMenu(anchor, items) {
   el.menu.innerHTML = '';
   el.menu.anchor = anchor;
-  for (const it of items) {
+  const safe = items.filter((it) => !it.danger), danger = items.filter((it) => it.danger);
+  for (const it of [...safe, ...danger]) {
+    if (it.danger && it === danger[0] && safe.length) el.menu.append(document.createElement('hr'));
     const b = document.createElement('button');
     b.textContent = it.label;
     if (it.danger) b.className = 'danger';
@@ -1258,12 +1261,12 @@ function treeMenu(row, anchor) {
   const folder = row.dataset.folder;
   const path = folder ?? row.dataset.path;
   const items = [];
+  items.push({ label: 'Move to folder…', run: () => moveToFolder(path) });
   if (folder != null) {
-    items.push({ label: 'New note here', run: () => newNote(folder) });
     items.push({ label: 'New folder here', run: () => newFolder(folder) });
+    items.push({ label: 'New note here', run: () => newNote(folder) });
   }
   items.push({ label: 'Rename…', run: () => renamePath(path, folder != null) });
-  items.push({ label: 'Move to folder…', run: () => moveToFolder(path) });
   items.push({ label: 'Share…', run: () => openShare(path, folder != null) });
   items.push({ label: 'Move to trash', danger: true, run: () => trashPath(path, folder != null) });
   showMenu(anchor, items);
@@ -1391,9 +1394,9 @@ $('#btn-more').onclick = (e) => {
     { label: 'Apply template…', expand: (b) => expandTemplatePicker(b) },
     { label: 'Deleted tasks…', run: () => openDeleted({ path: S.path }) },
     { label: 'History…', run: () => openHistory() },
-    { label: 'Move to trash', danger: true, run: () => trashPath(S.path, false) },
     { label: 'Properties…', run: () => openProps() },
     { label: 'Share…', run: () => openShare(S.path, false) },
+    { label: 'Move to trash', danger: true, run: () => trashPath(S.path, false) },
   ]);
 };
 $('#btn-help').onclick = (e) => showMenu(e.currentTarget, [
@@ -1507,7 +1510,7 @@ function commands() {
       { id: 'note-link', label: 'Note: Copy link to this note', run: () => copyText(`[[${basename(S.path)}]]`, 'Link copied') },
       { id: 'note-reveal', label: 'Note: Show in the sidebar', run: () => revealInTree(S.path) },
       { id: 'note-close', label: 'Note: Close', run: () => closeNote() },
-      { id: 'note-trash', label: 'Note: Move to trash', run: () => trashPath(S.path, false) },
+      { id: 'note-trash', label: 'Note: Move to trash', danger: true, run: () => trashPath(S.path, false) },
     ] : []),
     { id: 'view-source', label: 'View: Source', hint: 'Ctrl+E', run: view('edit') },
     ...(mobile.matches ? [] : [{ id: 'view-split', label: 'View: Split', hint: 'Ctrl+E', run: view('split') }]),
@@ -1526,7 +1529,8 @@ function commands() {
     { id: 'keys', label: 'Keybindings', hint: 'Ctrl+/', run: () => openKeys() },
     ...(isMulti() ? [{ id: 'sign-out', label: 'Sign out', run: () => signOut() }] : []),
   ];
-  return list;
+  // A–Z, destructive commands last (same rule as the menus)
+  return list.sort((a, b) => (!!a.danger - !!b.danger) || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
 }
 function commandItems(q) {
   const all = commands().map((c) => ({ ...c, recent: c.id }));
@@ -1613,10 +1617,10 @@ el.sync.onclick = (e) => {
   if (!syncConfigured()) return openSettings();
   if (S.sync.state === 'error') {
     return showMenu(e.currentTarget, [
+      { label: 'Settings…', run: openSettings },
+      { label: 'Show error', run: () => alert(S.sync.lastError) },
       { label: 'Try again', run: () => runSync({ manual: true }) },
       ...(S.sync.needsForce ? [{ label: 'Sync anyway', danger: true, run: () => runSync({ manual: true, force: true }) }] : []),
-      { label: 'Show error', run: () => alert(S.sync.lastError) },
-      { label: 'Settings…', run: openSettings },
     ]);
   }
   runSync({ manual: true });
