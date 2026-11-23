@@ -3,6 +3,7 @@
 import { marked } from './vendor/marked.esm.js';
 import { checkboxLines, toggleLine } from './shared/tasks.js';
 import { highlight } from './shared/highlight.js';
+import { lineCol, cursorsHTML } from './shared/caret.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const safeUrl = (u) => !/^\s*(javascript|vbscript|data):/i.test(u || '');
@@ -132,7 +133,43 @@ function setEditing(on) {
   $('#doc').hidden = doc.editing;
   if (doc.editing) { $('#editor-pub').value = doc.content; $('#editor-pub').focus(); }
   else if (doc.edit) render(doc.content, doc.name);
+  sendPresence();
+  renderCursors();
 }
+
+// ---- live collaboration: where this page's caret is (while editing), and everyone else's
+const PID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let people = [];
+const subQuery = () => (doc.sub ? `?path=${encodeURIComponent(doc.sub)}` : '');
+let lastSent = '';
+async function sendPresence(force = false) {
+  if (!doc.edit) return;
+  const at = doc.editing ? lineCol($('#editor-pub')) : { line: null, col: null };
+  const key = `${doc.sub}|${at.line}|${at.col}`;
+  if (key === lastSent && !force) return;
+  lastSent = key;
+  try {
+    await fetch(`/api/public/${encodeURIComponent(token)}/presence${subQuery()}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: PID, ...at }),
+    });
+  } catch {}
+}
+let presTimer = 0;
+const reportPresence = () => { clearTimeout(presTimer); presTimer = setTimeout(sendPresence, 150); };
+for (const ev of ['keyup', 'click', 'input']) document.addEventListener(ev, (e) => { if (e.target.id === 'editor-pub') reportPresence(); });
+// The server forgets a caret after a minute without news.
+setInterval(() => { if (doc.edit && document.visibilityState === 'visible') sendPresence(true); }, 25000);
+function renderCursors() {
+  const layer = $('#cursors-pub'), ta = $('#editor-pub');
+  const others = people.filter((p) => p.id !== 'g-' + PID);
+  layer.innerHTML = doc.editing && others.length ? cursorsHTML(ta, layer, others) : '';
+}
+const renderCursorsSoon = (() => { let raf = 0; return () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderCursors); }; })();
+$('#editor-pub').addEventListener('scroll', renderCursorsSoon);
+document.addEventListener('input', (e) => { if (e.target.id === 'editor-pub') renderCursorsSoon(); });
+addEventListener('resize', renderCursorsSoon);
+addEventListener('scroll', renderCursorsSoon, { passive: true });
+new ResizeObserver(renderCursorsSoon).observe($('#editor-pub'));
 
 async function savePub() {
   if (doc.saving) { doc.again = true; return; }
@@ -200,8 +237,11 @@ function watch(sub) {
   if (liveFor === sub && live) return;
   live?.close();
   liveFor = sub;
-  live = new EventSource(`/api/public/${encodeURIComponent(token)}/events${sub ? `?path=${encodeURIComponent(sub)}` : ''}`);
-  live.addEventListener('change', () => { const y = scrollY; load(false, true).then(() => scrollTo(0, y)); });
+  people = [];
+  renderCursors();
+  live = new EventSource(`/api/public/${encodeURIComponent(token)}/events?pid=${PID}${sub ? `&path=${encodeURIComponent(sub)}` : ''}`);
+  live.addEventListener('change', () => { const y = scrollY; load(false, true).then(() => { scrollTo(0, y); renderCursorsSoon(); }); });
+  live.addEventListener('presence', (e) => { people = JSON.parse(e.data).people || []; renderCursors(); });
 }
 
 async function load(push = false, quiet = false) {

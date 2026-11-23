@@ -23,7 +23,8 @@
     .share-files a .dir { color: var(--muted); }
     .share-files a:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
     .share-files a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-    .share-main { padding: 28px 32px 64px; min-width: 0; }
+    .share-main { padding: 28px 32px 64px; min-width: 0; position: relative; }
+    #cursors-pub { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
     .share-main h1.share-title { margin-top: 0; }
     .share-empty, .share-error { color: var(--muted); padding: 40px 0; }
     .md .wikilink.missing { color: var(--muted); text-decoration: none; cursor: default; }
@@ -55,7 +56,8 @@
   <div class="share-wrap single" id="wrap">
     <nav class="share-files" id="files" hidden aria-label="Notes in this folder"></nav>
     <main class="share-main"><article class="md" id="doc"><p class="share-empty">Loading…</p></article>
-      <textarea id="editor-pub" hidden spellcheck="true" aria-label="Note text"></textarea></main>
+      <textarea id="editor-pub" hidden spellcheck="true" aria-label="Note text"></textarea>
+      <div id="cursors-pub" aria-hidden="true"></div></main>
   </div>
   <script type="module" src="/share.js"></script>
 </body>

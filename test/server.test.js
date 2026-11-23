@@ -639,30 +639,32 @@ test('note history: versions, differences and restore (git)', async () => {
   } finally { await srv.stop(); }
 });
 
+/** Read server-sent events until `want` matches one (or time runs out). */
+function listenSSE(url) {
+  const ctl = new AbortController();
+  const events = [];
+  const done = fetch(url, { signal: ctl.signal }).then(async (r) => {
+    const dec = new TextDecoder();
+    let buf = '';
+    for await (const chunk of r.body) {
+      buf += dec.decode(chunk);
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i + 2);
+        const ev = /^event: (.*)$/m.exec(block)?.[1];
+        if (ev) events.push({ ev, data: JSON.parse(/^data: (.*)$/m.exec(block)?.[1] || 'null') });
+      }
+    }
+  }).catch(() => {});
+  const until = async (pred, ms = 3000) => { const t = Date.now(); while (Date.now() - t < ms) { const e = events.find(pred); if (e) return e; await new Promise((r) => setTimeout(r, 30)); } return null; };
+  return { events, until, close: () => { ctl.abort(); return done; } };
+}
+
 test('live collaboration: presence, gated by sign-in or a public link, and live public pages', async () => {
   const dir = tmp();
   const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault'), TICKMARK_PUBLIC_URL: 'https://notes.example.com' });
   const c = client(srv.base);
-  /** Read server-sent events until `want` matches one (or time runs out). */
-  const listen = (url) => {
-    const ctl = new AbortController();
-    const events = [];
-    const done = fetch(srv.base + url, { signal: ctl.signal }).then(async (r) => {
-      const dec = new TextDecoder();
-      let buf = '';
-      for await (const chunk of r.body) {
-        buf += dec.decode(chunk);
-        let i;
-        while ((i = buf.indexOf('\n\n')) >= 0) {
-          const block = buf.slice(0, i); buf = buf.slice(i + 2);
-          const ev = /^event: (.*)$/m.exec(block)?.[1];
-          if (ev) events.push({ ev, data: JSON.parse(/^data: (.*)$/m.exec(block)?.[1] || 'null') });
-        }
-      }
-    }).catch(() => {});
-    const until = async (pred, ms = 3000) => { const t = Date.now(); while (Date.now() - t < ms) { const e = events.find(pred); if (e) return e; await new Promise((r) => setTimeout(r, 30)); } return null; };
-    return { events, until, close: () => { ctl.abort(); return done; } };
-  };
+  const listen = (url) => listenSSE(srv.base + url);
   try {
     await c.call('POST', '/api/file', { path: 'Shared.md', content: 'hello\n' });
     await c.call('POST', '/api/file', { path: 'Private.md', content: 'mine\n' });
@@ -758,5 +760,32 @@ test('About and sync history', async (t) => {
       assert.equal(h.data[0].ok, false, 'an unreachable server is recorded as a failed sync');
       assert.ok(h.data[0].error);
     });
+  } finally { await srv.stop(); }
+});
+
+test('live collaboration: people editing through an editable link show their caret, and see others', async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault'), TICKMARK_PUBLIC_URL: 'https://notes.example.com' });
+  const { call } = client(srv.base);
+  const anon = client(srv.base).call;
+  try {
+    await call('POST', '/api/file', { path: 'Shared.md', content: 'one\ntwo\n' });
+    const sh = (await call('POST', '/api/shares', { path: 'Shared.md' })).data;
+    assert.equal((await anon('POST', `/api/public/${sh.token}/presence`, { id: 'g1', line: 0, col: 0 })).status, 403, 'read-only links have no caret');
+    await call('PUT', '/api/shares', { token: sh.token, edit: true });
+    const app = listenSSE(srv.base + '/api/events?pid=tab1');
+    const guest = listenSSE(`${srv.base}/api/public/${sh.token}/events?pid=g1`);
+    await call('POST', '/api/presence', { id: 'tab1', path: 'Shared.md', line: 0, col: 2 });
+    assert.equal((await anon('POST', `/api/public/${sh.token}/presence`, { id: 'g1', line: 1, col: 1 })).status, 200);
+    const seen = await app.until((e) => e.ev === 'presence' && e.data.people.some((p) => p.id === 'g-g1' && p.line === 1));
+    assert.ok(seen, 'the app sees the guest caret');
+    assert.equal(seen.data.people.find((p) => p.id === 'g-g1').name, 'Guest');
+    assert.ok(!seen.data.publicViewers['Shared.md'], 'an editing guest is not also counted as a viewer');
+    const g = await guest.until((e) => e.ev === 'presence' && e.data.people.some((p) => p.id === 'tab1' && p.col === 2));
+    assert.ok(g, 'the guest sees the app caret');
+    assert.equal(g.data.publicViewers, undefined, 'nothing else of the instance');
+    await guest.close();
+    assert.ok(await app.until((e) => e.ev === 'presence' && !e.data.people.some((p) => p.id === 'g-g1')), 'guest gone with its page');
+    await app.close();
   } finally { await srv.stop(); }
 });

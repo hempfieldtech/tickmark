@@ -82,10 +82,20 @@ export class Workspace {
     const cutoff = Date.now() - 60_000; // tabs that stopped reporting (closed without saying so)
     for (const [id, p] of this.presence) if (p.at < cutoff) this.presence.delete(id);
     const viewers = {};
-    for (const c of this.publicClients) if (c.kind === 'note') viewers[c.path] = (viewers[c.path] || 0) + 1;
+    // Visitors editing through the link show as people (with a caret), not in the viewer count.
+    for (const c of this.publicClients) if (c.kind === 'note' && !this.presence.has(c.pid)) viewers[c.path] = (viewers[c.path] || 0) + 1;
     return { people: [...this.presence.values()].map(({ at, ...p }) => p), publicViewers: viewers };
   }
-  broadcastPresence() { this.broadcast('presence', this.presenceState()); }
+  broadcastPresence() {
+    const state = this.presenceState();
+    this.broadcast('presence', state);
+    // An editable public page gets the carets in its own note, with nothing else of the instance.
+    for (const c of this.publicClients) {
+      if (!c.edit || c.kind !== 'note') continue;
+      const people = state.people.filter((p) => p.path === c.path).map(({ id, name, device, line, col }) => ({ id, name, device, line, col }));
+      c.res.write(`event: presence\ndata: ${JSON.stringify({ people })}\n\n`);
+    }
+  }
 
   scheduleScan() {
     clearTimeout(this.scanTimer);

@@ -5,6 +5,7 @@ import { textStats } from './shared/words.js';
 import { parseFrontmatter, writeFrontmatter } from './shared/frontmatter.js';
 import { highlight } from './shared/highlight.js';
 import { Vim } from './vim.js';
+import { textMirror, caretXY, lineCol, hue, cursorsHTML } from './shared/caret.js';
 
 // ---------------------------------------------------------------- utilities
 const $ = (s, root = document) => root.querySelector(s);
@@ -496,29 +497,6 @@ el.editor.addEventListener('blur', () => { if (el.editor.value !== S.base) flush
 
 // ---- [[wikilink]] suggestions: typing [[ lists matching notes; ↑/↓ to pick, Enter or Tab to insert.
 const suggest = { box: null, items: [], i: 0, start: 0 };
-/** A hidden copy of a textarea's text box (same font, padding and wrapping width), for measuring. */
-function textMirror(ta) {
-  let m = textMirror.el;
-  if (!m) { m = textMirror.el = document.createElement('div'); m.setAttribute('aria-hidden', 'true'); document.body.append(m); }
-  const cs = getComputedStyle(ta);
-  for (const p of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'wordSpacing', 'tabSize', 'textTransform', 'textIndent',
-    'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft']) m.style[p] = cs[p];
-  // clientWidth leaves out the scrollbar, so lines wrap where the textarea wraps them.
-  Object.assign(m.style, { position: 'absolute', visibility: 'hidden', top: '0', left: '-9999px', whiteSpace: 'pre-wrap', overflowWrap: 'break-word',
-    wordWrap: 'break-word', boxSizing: 'border-box', border: '0', width: ta.clientWidth + 'px', height: 'auto', overflow: 'hidden' });
-  return m;
-}
-/** Where a position in a textarea is: on screen (x, y), and from the top of its text (top, for scrolling). */
-function caretXY(ta, pos) {
-  const m = textMirror(ta);
-  m.textContent = ta.value.slice(0, pos);
-  const mark = document.createElement('span');
-  mark.textContent = '\u200b';
-  m.append(mark);
-  const r = ta.getBoundingClientRect();
-  return { x: r.left + ta.clientLeft + mark.offsetLeft - ta.scrollLeft, y: r.top + ta.clientTop + mark.offsetTop - ta.scrollTop,
-    top: mark.offsetTop, h: parseFloat(getComputedStyle(ta).lineHeight) || 20 };
-}
 function closeSuggest() { suggest.box?.remove(); suggest.box = null; suggest.items = []; }
 
 // ---- :shortcodes: for task metadata. Typing ":cal" offers 📅 and friends; ":calendar:" turns into it.
@@ -739,24 +717,9 @@ addEventListener('resize', debounce(() => { renderGutter(); renderCursors(); siz
 // ---- other people's cursors (live collaboration): a coloured caret with their name, where they are in the text
 function renderCursors() {
   const box = $('#cursors');
-  const ed = el.editor;
-  const others = othersHere().filter((p) => p.line != null);
-  if (!others.length || S.mode !== 'note' || effectiveView() === 'read' || ed.hidden) { box.innerHTML = ''; return; }
-  const lines = ed.value.split('\n');
-  const wr = $('#workspace').getBoundingClientRect(), er = ed.getBoundingClientRect();
-  box.innerHTML = others.map((p) => {
-    const ln = Math.min(p.line, lines.length - 1);
-    let off = 0;
-    for (let i = 0; i < ln; i++) off += lines[i].length + 1;
-    off += Math.min(p.col ?? 0, lines[ln].length);
-    const c = caretXY(ed, off);
-    const name = p.name ? `${p.name} · ${p.device}` : p.device;
-    // Above or below what's showing: a marker on that edge of the editor instead.
-    const edge = c.y < er.top ? 'above' : c.y + c.h > er.bottom ? 'below' : null;
-    const top = edge === 'above' ? er.top - wr.top : edge === 'below' ? er.bottom - wr.top - 20 : c.y - wr.top;
-    return `<span class="rcursor${edge ? ' edge ' + edge : ''}" style="--h:${hue(p.id)};left:${Math.max(er.left - wr.left, c.x - wr.left)}px;top:${top}px;height:${edge ? 20 : c.h}px">` +
-      `<span class="rname">${edge === 'above' ? '↑ ' : edge === 'below' ? '↓ ' : ''}${esc(name)}</span></span>`;
-  }).join('');
+  const others = othersHere();
+  if (!others.length || S.mode !== 'note' || effectiveView() === 'read' || el.editor.hidden) { box.innerHTML = ''; return; }
+  box.innerHTML = cursorsHTML(el.editor, $('#workspace'), others);
 }
 const renderCursorsSoon = (() => { let raf = 0; return () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderCursors); }; })();
 
@@ -2939,12 +2902,7 @@ function connectEvents() {
 const PID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 S.presence = { people: [], publicViewers: {} };
 const othersHere = () => (S.mode === 'note' && S.collab ? S.presence.people.filter((p) => p.path === S.path && p.id !== PID) : []);
-/** The caret as line and column, which survive other people's edits better than an offset. */
-function cursorAt() {
-  const before = el.editor.value.slice(0, el.editor.selectionStart);
-  const nl = before.lastIndexOf('\n');
-  return { line: before.split('\n').length - 1, col: before.length - nl - 1 };
-}
+const cursorAt = () => lineCol(el.editor);
 async function sendPresence() {
   const path = S.mode === 'note' ? S.path : null;
   const at = path ? cursorAt() : { line: null, col: null };
@@ -2963,7 +2921,6 @@ el.editor.addEventListener('keyup', () => reportPresence());
 el.editor.addEventListener('click', () => reportPresence());
 el.editor.addEventListener('input', () => reportPresence());
 addEventListener('pagehide', () => { fetch(`/api/presence?id=${enc(PID)}`, { method: 'DELETE', keepalive: true }).catch(() => {}); });
-const hue = (id) => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
 function renderPresence() {
   const box = $('#presence');
   const others = othersHere();

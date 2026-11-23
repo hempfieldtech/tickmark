@@ -225,15 +225,18 @@ function publicEvents(req, res, token, sub) {
     const s = shares.get(token);
     publicShare(token, sub); // validates the token and the path
     ws = workspaceFor(s.owner ?? undefined);
-    entry = { res, kind: s.kind, path: s.kind === 'folder' && sub ? `${s.path}/${sub}` : s.path };
+    entry = { res, kind: s.kind, path: s.kind === 'folder' && sub ? `${s.path}/${sub}` : s.path, edit: !!s.edit };
     if (s.kind === 'folder' && sub) entry.kind = 'note';
+    // An editable link's page has an id, so its caret shows to others (see POST …/presence).
+    const pid = String(req.url && new URL(req.url, 'http://x').searchParams.get('pid') || '').slice(0, 64);
+    if (pid && entry.edit) entry.pid = 'g-' + pid;
   } catch (e) { return json(res, e.status || 404, { error: e.message }); }
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Robots-Tag': 'noindex' });
   res.write(': hi\n\n');
   ws.publicClients.add(entry);
   ws.broadcastPresence(); // editors see the visitor count go up
   const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-  req.on('close', () => { ws.publicClients.delete(entry); clearInterval(ping); ws.broadcastPresence(); });
+  req.on('close', () => { ws.publicClients.delete(entry); clearInterval(ping); if (entry.pid) ws.presence.delete(entry.pid); ws.broadcastPresence(); });
 }
 
 /**
@@ -656,6 +659,23 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && /^\/s\/[\w-]+(\/.*)?$/.test(url.pathname)) return serveShareShell(res);
   const pubEvents = req.method === 'GET' && url.pathname.match(/^\/api\/public\/([\w-]+)\/events$/);
   if (pubEvents) return publicEvents(req, res, pubEvents[1], url.searchParams.get('path'));
+  const pubPresence = req.method === 'POST' && url.pathname.match(/^\/api\/public\/([\w-]+)\/presence$/);
+  if (pubPresence) {
+    // Someone editing through an editable link: where their caret is, so others see it (as a guest).
+    try {
+      const { ws, rel, edit } = publicShare(pubPresence[1], url.searchParams.get('path'));
+      if (!edit || !rel) throw Object.assign(new Error('This link is read-only'), { status: 403 });
+      const body = await readBody(req);
+      const id = String(body.id || '').slice(0, 64);
+      if (!id) throw Object.assign(new Error('Missing id'), { status: 400 });
+      const int = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
+      ws.setPresence({ id: 'g-' + id, path: rel, line: int(body.line), col: int(body.col), name: 'Guest', device: deviceName(req.headers['user-agent']), guest: true });
+      return json(res, 200, { ok: true }, { 'X-Robots-Tag': 'noindex' });
+    } catch (e) {
+      if (!e.status) console.error(e);
+      return json(res, e.status || 500, { error: e.status ? e.message : 'Something went wrong' });
+    }
+  }
   const pub = (req.method === 'GET' || req.method === 'PUT') && url.pathname.match(/^\/api\/public\/([\w-]+)$/);
   if (pub) {
     try {
