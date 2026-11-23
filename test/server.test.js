@@ -789,3 +789,85 @@ test('live collaboration: people editing through an editable link show their car
     await app.close();
   } finally { await srv.stop(); }
 });
+
+/** A raw request, for headers fetch won't let a test set (Host, Origin). */
+function raw(base, method, url, { headers = {}, body } = {}) {
+  const u = new URL(base + url);
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: u.hostname, port: u.port, path: u.pathname + u.search, method, headers }, (res) => {
+      let t = ''; res.on('data', (d) => (t += d)); res.on('end', () => { let data; try { data = JSON.parse(t); } catch { data = t; } resolve({ status: res.statusCode, data, headers: res.headers }); });
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+test('forged requests: other sites cannot post forms or text, or send requests from their pages', async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault') });
+  try {
+    const body = JSON.stringify({ name: 'evil', password: 'evilevil1' });
+    // A form or "simple" request from another site: not JSON, so refused (and no admin is created).
+    for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data; boundary=x']) {
+      assert.equal((await raw(srv.base, 'POST', '/api/setup/admin', { headers: { 'Content-Type': type }, body })).status, 415, type);
+    }
+    // JSON from another site's page carries its Origin.
+    const cross = await raw(srv.base, 'POST', '/api/setup/admin', { headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body });
+    assert.equal(cross.status, 403);
+    assert.equal((await raw(srv.base, 'PUT', '/api/file?path=A.md', { headers: { 'Content-Type': 'application/json', Origin: 'null' }, body: '{"content":"x"}' })).status, 403);
+    assert.equal((await client(srv.base).call('GET', '/api/auth/me')).data.mode, 'single', 'still single-user: nobody took over');
+    // Its own page (same Origin as Host) works.
+    const own = srv.base.replace('http://', '');
+    assert.equal((await raw(srv.base, 'POST', '/api/file', { headers: { 'Content-Type': 'application/json', Origin: srv.base, Host: own }, body: '{"path":"A.md","content":"x"}' })).status, 200);
+    // DNS rebinding: with no sign-in at all, a name it wasn't given is refused; addresses and local names work.
+    assert.equal((await raw(srv.base, 'GET', '/api/tree', { headers: { Host: 'rebind.evil.example' } })).status, 421);
+    for (const h of ['192.168.1.20:8087', 'notes.lan', 'nas', '[::1]:8087', 'box.tail1234.ts.net']) assert.equal((await raw(srv.base, 'GET', '/api/tree', { headers: { Host: h } })).status, 200, h);
+    // The app page forbids scripts from anywhere else and framing.
+    const page = await raw(srv.base, 'GET', '/');
+    assert.match(page.headers['content-security-policy'], /script-src 'self'/);
+    assert.match(page.headers['content-security-policy'], /frame-ancestors 'none'/);
+  } finally { await srv.stop(); }
+});
+
+test('with several users, only admins can point CalDAV inside the network', async () => {
+  const dir = tmp();
+  const data = path.join(dir, 'data');
+  addUser(data, 'alex', 'alex password', '--admin');
+  addUser(data, 'bob', 'bobs password');
+  const srv = await startServer({ TICKMARK_DATA: data, TICKMARK_VAULT: path.join(dir, 'vault') });
+  try {
+    const bob = client(srv.base), alex = client(srv.base);
+    await bob.call('POST', '/api/auth/login', { username: 'bob', password: 'bobs password' });
+    await alex.call('POST', '/api/auth/login', { username: 'alex', password: 'alex password' });
+    const b = await bob.call('POST', '/api/caldav/discover', { url: 'http://127.0.0.1:1/dav/' });
+    assert.equal(b.status, 403);
+    assert.match(b.data.error, /inside the network/);
+    assert.equal((await bob.call('POST', '/api/caldav/calendars', { url: 'http://10.0.0.1/dav/', name: 'x' })).status, 403);
+    const a = await alex.call('POST', '/api/caldav/discover', { url: 'http://127.0.0.1:1/dav/' });
+    assert.equal(a.status, 502, 'an admin gets through (and here finds nothing listening)');
+  } finally { await srv.stop(); }
+});
+
+test('removing a public link, or making it read-only, ends its open live pages', async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault'), TICKMARK_PUBLIC_URL: 'https://notes.example.com' });
+  const { call } = client(srv.base);
+  const ended = (url) => new Promise((resolve) => {
+    fetch(srv.base + url).then(async (r) => { for await (const _ of r.body); resolve(true); }).catch(() => resolve(true));
+  });
+  try {
+    await call('POST', '/api/file', { path: 'Shared.md', content: 'x\n' });
+    const sh = (await call('POST', '/api/shares', { path: 'Shared.md' })).data;
+    await call('PUT', '/api/shares', { token: sh.token, edit: true });
+    // A guest caret needs the page's live stream open.
+    assert.equal((await client(srv.base).call('POST', `/api/public/${sh.token}/presence`, { id: 'nobody', line: 0 })).status, 409);
+    let done = ended(`/api/public/${sh.token}/events?pid=g1`);
+    await new Promise((r) => setTimeout(r, 200));
+    await call('PUT', '/api/shares', { token: sh.token, edit: false });
+    assert.equal(await Promise.race([done, new Promise((r) => setTimeout(() => r(false), 2000))]), true, 'made read-only: stream ended');
+    done = ended(`/api/public/${sh.token}/events`);
+    await new Promise((r) => setTimeout(r, 200));
+    await call('DELETE', `/api/shares?token=${sh.token}`);
+    assert.equal(await Promise.race([done, new Promise((r) => setTimeout(() => r(false), 2000))]), true, 'removed: stream ended');
+  } finally { await srv.stop(); }
+});

@@ -3,10 +3,10 @@
 import { marked } from './vendor/marked.esm.js';
 import { checkboxLines, toggleLine } from './shared/tasks.js';
 import { highlight } from './shared/highlight.js';
+import { safeUrl } from './shared/url.js';
 import { lineCol, cursorsHTML } from './shared/caret.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const safeUrl = (u) => !/^\s*(javascript|vbscript|data):/i.test(u || '');
 const $ = (s) => document.querySelector(s);
 const [, , token, ...rest] = location.pathname.split('/');
 const base = `/s/${token}`;

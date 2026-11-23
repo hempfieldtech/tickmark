@@ -19,7 +19,8 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { VaultError } from './vault.js';
-import { CalDAV, CalDAVError } from './caldav.js';
+import net from 'node:net';
+import { CalDAV, CalDAVError, destinationPolicy, refusePrivate } from './caldav.js';
 import { Workspace } from './workspace.js';
 import { UserStore, Sessions, LoginLimiter, AuthError, normName } from './users.js';
 import { OIDC, OIDCError } from './oidc.js';
@@ -37,6 +38,10 @@ const HOST = process.env.HOST || '127.0.0.1';
 const AUTH_USER = process.env.TICKMARK_USER;
 const AUTH_PASS = process.env.TICKMARK_PASS;
 const PUBLIC = path.join(ROOT, 'public');
+// Behind a reverse proxy, the client's address is the last X-Forwarded-For hop (for sign-in limits).
+const TRUST_PROXY = /^(1|true|yes)$/i.test(process.env.TICKMARK_TRUST_PROXY || '');
+// Extra host names the server answers to without sign-in (see allowedHost).
+const ALLOWED_HOSTS = (process.env.TICKMARK_ALLOWED_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
 const COOKIE = 'tm_session';
 
 // Fail early with a fix, instead of EACCES on the first save. The usual cause: Docker created a
@@ -111,6 +116,15 @@ if (MULTI) {
   if (first) adoptLegacy(first);
 }
 
+// With several users, only admins may point CalDAV at addresses inside the network (a user could
+// otherwise use the server to probe the LAN). TICKMARK_ALLOW_PRIVATE_CALDAV=true lifts that.
+const PRIVATE_CALDAV = /^(1|true|yes)$/i.test(process.env.TICKMARK_ALLOW_PRIVATE_CALDAV || '');
+destinationPolicy.check = async (url, owner) => {
+  if (!MULTI || PRIVATE_CALDAV) return;
+  if (owner && users.get(owner)?.admin) return;
+  await refusePrivate(url);
+};
+
 function workspaceFor(name) {
   if (!MULTI) return single;
   let ws = workspaces.get(name);
@@ -145,14 +159,20 @@ const json = (res, status, body, headers = {}) => {
 };
 const redirect = (res, to, headers = {}) => { res.writeHead(302, { Location: to, 'Cache-Control': 'no-store', ...headers }); res.end(); };
 
-async function readBody(req) {
+/**
+ * A JSON request body. Only application/json is accepted: a page on another site can send a form or
+ * a "simple" text/plain request without asking, but not JSON, so this closes off forged requests.
+ */
+async function readBody(req, max = 20 * 1024 * 1024) {
+  if (Number(req.headers['content-length'] || 0) > max) throw new VaultError('Body too large', 413);
   const chunks = [];
   let size = 0;
   for await (const c of req) {
     size += c.length;
-    if (size > 20 * 1024 * 1024) throw new VaultError('Body too large', 413);
+    if (size > max) throw new VaultError('Body too large', 413);
     chunks.push(c);
   }
+  if (size && !/^application\/json\b/i.test(String(req.headers['content-type'] || ''))) throw new VaultError('Send JSON (Content-Type: application/json)', 415);
   const s = Buffer.concat(chunks).toString('utf8');
   if (!s) return {};
   try { return JSON.parse(s); } catch { throw new VaultError('Invalid JSON'); }
@@ -181,6 +201,13 @@ const MIME = {
   '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml',
   '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
 };
+// The app's page: scripts only from this server (so a link or note can't run code), no framing.
+const APP_HEADERS = {
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src * data: blob:; " +
+    "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'same-origin',
+};
 function serveStatic(req, res, pathname) {
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { return json(res, 400, { error: 'Bad path' }); }
@@ -194,7 +221,7 @@ function serveStatic(req, res, pathname) {
     return fs.readFile(path.join(PUBLIC, rel), 'utf8', (err, src) => {
       if (err) return json(res, 404, { error: 'Not found' });
       const out = rel === '/index.html' ? branding.html(src).replace('content="dev"', `content="${BUILD}"`).replace(/(href|src)="\/(style\.css|app\.js|theme\.js)"/g, `$1="/$2?v=${BUILD}"`) : branding.manifest(src);
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(rel)], 'Cache-Control': 'no-cache' });
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(rel)], 'Cache-Control': 'no-cache', ...(rel === '/index.html' ? APP_HEADERS : {}), 'X-Content-Type-Options': 'nosniff' });
       res.end(out);
     });
   }
@@ -213,10 +240,15 @@ function serveStatic(req, res, pathname) {
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(abs)] || 'application/octet-stream',
       'Cache-Control': 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
     });
     fs.createReadStream(abs).pipe(res);
   });
 }
+
+const PUBLIC_STREAMS_PER_LINK = 30, PUBLIC_STREAMS_TOTAL = 300;
+/** End the live pages of a link that was removed or changed, so they reconnect with what it allows now. */
+function closePublic(ws, token) { for (const c of ws.publicClients) if (c.token === token) c.res.end(); }
 
 /** Live updates for a public page: "change" whenever its note (or a note in its folder) changes. */
 function publicEvents(req, res, token, sub) {
@@ -225,12 +257,16 @@ function publicEvents(req, res, token, sub) {
     const s = shares.get(token);
     publicShare(token, sub); // validates the token and the path
     ws = workspaceFor(s.owner ?? undefined);
-    entry = { res, kind: s.kind, path: s.kind === 'folder' && sub ? `${s.path}/${sub}` : s.path, edit: !!s.edit };
+    entry = { res, token, kind: s.kind, path: s.kind === 'folder' && sub ? `${s.path}/${sub}` : s.path, edit: !!s.edit };
     if (s.kind === 'folder' && sub) entry.kind = 'note';
     // An editable link's page has an id, so its caret shows to others (see POST …/presence).
     const pid = String(req.url && new URL(req.url, 'http://x').searchParams.get('pid') || '').slice(0, 64);
     if (pid && entry.edit) entry.pid = 'g-' + pid;
   } catch (e) { return json(res, e.status || 404, { error: e.message }); }
+  // Anyone with the link can open these, so there are only so many per link and in all.
+  let perLink = 0, all = 0;
+  for (const w of MULTI ? workspaces.values() : [single]) for (const c of w.publicClients) { all++; if (c.token === token) perLink++; }
+  if (perLink >= PUBLIC_STREAMS_PER_LINK || all >= PUBLIC_STREAMS_TOTAL) return json(res, 429, { error: 'Too many people have this page open right now' });
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Robots-Tag': 'noindex' });
   res.write(': hi\n\n');
   ws.publicClients.add(entry);
@@ -280,7 +316,34 @@ function cookie(req, name, value, { maxAge, path: p = '/' } = {}) {
     (maxAge !== undefined ? `; Max-Age=${maxAge}` : '');
 }
 const sessionCookie = (req, token) => cookie(req, COOKIE, token, { maxAge: 30 * 86400 });
-const clientIp = (req) => req.socket.remoteAddress || '?';
+const clientIp = (req) => {
+  if (TRUST_PROXY) { const hops = String(req.headers['x-forwarded-for'] || '').split(',').map((h) => h.trim()).filter(Boolean); if (hops.length) return hops.at(-1); }
+  return req.socket.remoteAddress || '?';
+};
+/** Host names that are this server's, for requests to change something (see sameOrigin). */
+function ownHosts(req) {
+  const out = new Set([req.headers.host, ...String(req.headers['x-forwarded-host'] || '').split(',')].map((h) => String(h || '').trim().toLowerCase()).filter(Boolean));
+  if (oidc.publicUrl) out.add(new URL(oidc.publicUrl).host.toLowerCase());
+  return out;
+}
+/** A request to change something must come from Tickmark's own pages, when the browser says where from. */
+function sameOrigin(req) {
+  if (req.method === 'GET' || req.method === 'HEAD') return true;
+  const o = req.headers.origin;
+  if (!o) return true; // not a browser, or an old one; JSON-only bodies still stop forged form posts
+  try { return ownHosts(req).has(new URL(o).host.toLowerCase()); } catch { return false; }
+}
+/**
+ * With no sign-in at all, a web page could reach the server through a name of its own that it points
+ * at this machine (DNS rebinding). So it answers only to addresses, local names and names it was given.
+ */
+function allowedHost(req) {
+  if (MULTI || AUTH_USER) return true; // other sites' pages don't get the session or password
+  const host = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  if (!host || net.isIP(host) || !host.includes('.') || ALLOWED_HOSTS.includes(host)) return true;
+  if (oidc.publicUrl && new URL(oidc.publicUrl).hostname.toLowerCase() === host) return true;
+  return /\.(local|lan|home|home\.arpa|internal|localdomain|localhost|ts\.net)$/.test(host);
+}
 const origin = (req) => `${isHttps(req) ? 'https' : 'http'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
 
 /** Basic auth in single-user mode (TICKMARK_USER/PASS). */
@@ -346,10 +409,10 @@ const routes = {
     const r = ws.vault.create(String(body.path), String(body.content ?? ''));
     return { path: r.path, hash: r.hash };
   },
-  'DELETE /api/file': ({ ws, user }, q) => { ws.vault.trash(q.get('path')); shares.removed(owner(user), q.get('path')); return { ok: true }; },
+  'DELETE /api/file': ({ ws, user }, q) => { ws.vault.trash(q.get('path')); shares.removed(owner(user), ws.vault.rel(ws.vault.resolve(q.get('path')))); return { ok: true }; },
   'POST /api/rename': ({ ws, user }, q, body) => {
     const updated = ws.rename(String(body.from), String(body.to));
-    shares.moved(owner(user), String(body.from), String(body.to));
+    shares.moved(owner(user), ws.vault.rel(ws.vault.resolve(String(body.from))), ws.vault.rel(ws.vault.resolve(String(body.to))));
     return { ok: true, updated };
   },
   // ---- live collaboration: which note each open tab is on
@@ -414,12 +477,17 @@ const routes = {
     if (st.isFile() && !rel.toLowerCase().endsWith('.md')) throw Object.assign(new Error('Only notes and folders can be shared'), { status: 400 });
     return shareInfo(shares.create(owner(user), rel, st.isDirectory() ? 'folder' : 'note'));
   },
-  'PUT /api/shares': ({ user }, q, body) => {
+  'PUT /api/shares': ({ ws, user }, q, body) => {
     const s = shares.setEdit(owner(user), String(body.token || ''), !!body.edit);
     if (!s) throw Object.assign(new Error('That link no longer exists'), { status: 404 });
+    closePublic(ws, s.token);
     return shareInfo(s);
   },
-  'DELETE /api/shares': ({ user }, q) => ({ ok: shares.remove(owner(user), q.get('token')) }),
+  'DELETE /api/shares': ({ ws, user }, q) => {
+    const ok = shares.remove(owner(user), q.get('token'));
+    if (ok) closePublic(ws, q.get('token'));
+    return { ok };
+  },
   // ---- the vault's .trash folder
   'GET /api/trash': ({ ws }) => ws.vault.listTrash(),
   'POST /api/trash/restore': ({ ws, user }, q, body) => ({ path: ws.vault.restoreTrash(String(body.name || '')) }),
@@ -429,18 +497,20 @@ const routes = {
   'GET /api/backlinks': ({ ws }, q) => ws.index.backlinks(q.get('path') || ''),
   'GET /api/config': ({ ws }) => ws.config.public(),
   'PUT /api/config': ({ ws }, q, body) => ws.updateConfig(body),
-  'POST /api/caldav/discover': async ({ ws }, q, body) => {
+  'POST /api/caldav/discover': async ({ ws, user }, q, body) => {
     const saved = body.accountId ? ws.config.account(body.accountId) : null;
     const client = new CalDAV({
+      owner: user?.name ?? null,
       url: body.url || saved?.url,
       username: body.username ?? saved?.username,
       password: body.password || saved?.password,
     });
     return { calendars: await client.discover() };
   },
-  'POST /api/caldav/calendars': async ({ ws }, q, body) => {
+  'POST /api/caldav/calendars': async ({ ws, user }, q, body) => {
     const saved = body.accountId ? ws.config.account(body.accountId) : null;
     const client = new CalDAV({
+      owner: user?.name ?? null,
       url: body.url || saved?.url,
       username: body.username ?? saved?.username,
       password: body.password || saved?.password,
@@ -655,6 +725,10 @@ async function handleOidc(req, res, url) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
+  if (!allowedHost(req)) {
+    return json(res, 421, { error: `Tickmark doesn't answer to the name ${String(req.headers.host).replace(/[^\w.:-]/g, '')} without sign-in. Add it to TICKMARK_ALLOWED_HOSTS, or turn sign-in on.` });
+  }
+  if (!sameOrigin(req)) return json(res, 403, { error: "Requests from other sites aren't allowed" });
   // Public links: no sign-in, read-only, and nothing else of the instance is reachable through them.
   if (req.method === 'GET' && /^\/s\/[\w-]+(\/.*)?$/.test(url.pathname)) return serveShareShell(res);
   const pubEvents = req.method === 'GET' && url.pathname.match(/^\/api\/public\/([\w-]+)\/events$/);
@@ -665,9 +739,11 @@ const server = http.createServer(async (req, res) => {
     try {
       const { ws, rel, edit } = publicShare(pubPresence[1], url.searchParams.get('path'));
       if (!edit || !rel) throw Object.assign(new Error('This link is read-only'), { status: 403 });
-      const body = await readBody(req);
+      const body = await readBody(req, 4096);
       const id = String(body.id || '').slice(0, 64);
       if (!id) throw Object.assign(new Error('Missing id'), { status: 400 });
+      // Only a page with this note's live stream open has a caret (so the number of guests is bounded).
+      if (![...ws.publicClients].some((c) => c.pid === 'g-' + id && c.path === rel)) throw Object.assign(new Error('Open the page first'), { status: 409 });
       const int = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
       ws.setPresence({ id: 'g-' + id, path: rel, line: int(body.line), col: int(body.col), name: 'Guest', device: deviceName(req.headers['user-agent']), guest: true });
       return json(res, 200, { ok: true }, { 'X-Robots-Tag': 'noindex' });
@@ -683,7 +759,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'PUT') {
         // An editable link: save the shared note (merged with changes made meanwhile), nothing else.
         if (!data.edit || !rel) throw Object.assign(new Error('This link is read-only'), { status: 403 });
-        const body = await readBody(req);
+        const body = await readBody(req, 6 * 1024 * 1024);
         const content = String(body.content ?? '');
         if (content.length > 2 * 1024 * 1024) throw Object.assign(new Error('That note is too large'), { status: 413 });
         const r = ws.vault.save(rel, content, { baseContent: typeof body.baseContent === 'string' ? body.baseContent : null });
@@ -707,7 +783,7 @@ const server = http.createServer(async (req, res) => {
   const key = `${req.method} ${url.pathname}`;
   try {
     if (authRoutes[key]) {
-      const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : {};
+      const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req, 64 * 1024) : {};
       return json(res, 200, await authRoutes[key]({ req, res }, url.searchParams, body));
     }
     const user = MULTI ? sessionUser(req) : null;
@@ -735,9 +811,11 @@ const server = http.createServer(async (req, res) => {
     const ctx = { user, req, res, get ws() { return workspaceFor(user?.name); } };
     json(res, 200, await handler(ctx, url.searchParams, body));
   } catch (e) {
-    const status = e instanceof CalDAVError ? 502 : Number.isInteger(e.status) ? e.status : 500;
-    if (status === 500) console.error(e);
-    json(res, status, { error: e.message });
+    const known = e instanceof CalDAVError || Number.isInteger(e.status);
+    const status = e instanceof CalDAVError ? (e.status === 403 ? 403 : 502) : known ? e.status : 500;
+    if (!known) console.error(e);
+    // An unexpected error's message can hold server paths: the log has it, the browser gets less.
+    json(res, status, { error: known ? e.message : 'Something went wrong (see the server log)', ...(e.needsForce ? { needsForce: true } : {}) });
   }
 });
 

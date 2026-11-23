@@ -1,6 +1,6 @@
 // Tickmark service worker: network-first everywhere, falling back to cache when offline.
 const CACHE = 'tickmark-v34';
-const SHELL = ['/', '/index.html', '/style.css', '/theme.js', '/app.js', '/shared/tasks.js', '/shared/recur.js', '/shared/words.js', '/shared/frontmatter.js', '/shared/caret.js', '/shared/highlight.js', '/vendor/marked.esm.js',
+const SHELL = ['/', '/index.html', '/style.css', '/theme.js', '/app.js', '/shared/tasks.js', '/shared/recur.js', '/shared/words.js', '/shared/frontmatter.js', '/shared/caret.js', '/shared/url.js', '/shared/highlight.js', '/vendor/marked.esm.js',
   '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png'];
 // API reads worth keeping for offline viewing; everything else under /api is network-only.
 const CACHEABLE_API = /^\/api\/(tree|file|config|backlinks)$/;

@@ -2,6 +2,47 @@
 // Auth: answers the server's 401 challenge with Digest (RFC 7616, MD5/SHA-256, -sess) or Basic.
 
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
+import net from 'node:net';
+
+/**
+ * Who may reach which servers. `check(url, owner)` throws to refuse a destination; index.js sets it
+ * so that, with several users, only admins can point Tickmark at addresses inside the network.
+ */
+export const destinationPolicy = { check: null };
+const MAX_REPLY = 25 * 1024 * 1024; // a task list's REPORT reply; anything bigger isn't a CalDAV server
+
+/** True for loopback, private, link-local, CGNAT, unique-local and unspecified addresses. */
+export function isPrivateAddress(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  const v = ip.toLowerCase().replace(/^\[|\]$/g, '');
+  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v);
+  if (m) return isPrivateAddress(m[1]);
+  return v === '::' || v === '::1' || /^f[cd]/.test(v) || /^fe[89ab]/.test(v) || /^ff/.test(v);
+}
+/** Refuse a URL whose host is (or resolves to) a private address. */
+export async function refusePrivate(url) {
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+  const addrs = net.isIP(host) ? [host] : (await dns.lookup(host, { all: true }).catch(() => [])).map((a) => a.address);
+  if (addrs.some(isPrivateAddress)) throw new CalDAVError(`${host} is inside the network; ask an admin to set up this account`, 403);
+}
+
+async function readCapped(res) {
+  const len = Number(res.headers.get('content-length') || 0);
+  if (len > MAX_REPLY) throw new CalDAVError('The server sent a reply too large to be a task list', 0);
+  const chunks = [];
+  let size = 0;
+  for await (const c of res.body || []) {
+    size += c.length;
+    if (size > MAX_REPLY) throw new CalDAVError('The server sent a reply too large to be a task list', 0);
+    chunks.push(c);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 const decode = (s) => s.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-fA-F]+);/g, (m, e) => {
   if (e === 'lt') return '<';
@@ -13,21 +54,49 @@ const decode = (s) => s.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-fA-F]+);/g, 
 });
 const local = (n) => n.includes(':') ? n.slice(n.indexOf(':') + 1) : n;
 
+/**
+ * A small XML reader for WebDAV replies: elements, attributes and text, no entities beyond the
+ * basic ones and no DTDs. One pass with indexOf, so a hostile server's malformed reply costs
+ * time in proportion to its length (a regex here backtracked badly on unclosed tags).
+ */
 export function parseXML(str) {
   const root = { name: '#root', attrs: {}, children: [], text: '' };
   const stack = [root];
-  const re = /<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!DOCTYPE[^>]*>|<\/\s*([^\s>]+)\s*>|<\s*([^\s>/]+)([^>]*?)(\/?)>|([^<]+)/g;
-  for (const m of str.matchAll(re)) {
+  const n = str.length;
+  let i = 0;
+  const skipTo = (end, from) => { const j = str.indexOf(end, from); return j < 0 ? n : j + end.length; };
+  while (i < n) {
     const top = stack.at(-1);
-    if (m[1] !== undefined) top.text += m[1];
-    else if (m[2]) { if (stack.length > 1) stack.pop(); }
-    else if (m[3]) {
+    const lt = str.indexOf('<', i);
+    if (lt < 0) { top.text += decode(str.slice(i)); break; }
+    if (lt > i) top.text += decode(str.slice(i, lt));
+    if (str.startsWith('<![CDATA[', lt)) {
+      const j = str.indexOf(']]>', lt + 9);
+      top.text += str.slice(lt + 9, j < 0 ? n : j);
+      i = j < 0 ? n : j + 3;
+    } else if (str.startsWith('<!--', lt)) i = skipTo('-->', lt + 4);
+    else if (str.startsWith('<?', lt)) i = skipTo('?>', lt + 2);
+    else if (str.startsWith('<!', lt)) i = skipTo('>', lt + 2);
+    else {
+      const gt = str.indexOf('>', lt + 1);
+      if (gt < 0) break; // a tag that never closes: the rest isn't XML
+      let inner = str.slice(lt + 1, gt);
+      i = gt + 1;
+      if (inner.startsWith('/')) {
+        if (stack.length > 1) stack.pop();
+        continue;
+      }
+      const selfClose = inner.endsWith('/');
+      if (selfClose) inner = inner.slice(0, -1);
+      const sp = inner.search(/\s/);
+      const tag = (sp < 0 ? inner : inner.slice(0, sp)).trim();
+      if (!tag) continue;
       const attrs = {};
-      for (const a of (m[4] || '').matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[local(a[1])] = decode(a[2] ?? a[3]);
-      const node = { name: local(m[3]).toLowerCase(), attrs, children: [], text: '' };
+      if (sp >= 0) for (const a of inner.slice(sp).matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[local(a[1])] = decode(a[2] ?? a[3]);
+      const node = { name: local(tag).toLowerCase(), attrs, children: [], text: '' };
       top.children.push(node);
-      if (!m[5]) stack.push(node);
-    } else if (m[6]) top.text += decode(m[6]);
+      if (!selfClose) stack.push(node);
+    }
   }
   return root;
 }
@@ -94,8 +163,9 @@ export class CalDAVError extends Error {
 }
 
 export class CalDAV {
-  constructor({ url, username, password }) {
+  constructor({ url, username, password, owner = null }) {
     this.url = url;
+    this.owner = owner;
     this.username = username || '';
     this.password = password || '';
   }
@@ -150,12 +220,25 @@ export class CalDAV {
       if (auth) h.Authorization = auth;
       if (depth !== undefined) h.Depth = String(depth);
       if (body && !h['Content-Type']) h['Content-Type'] = 'application/xml; charset=utf-8';
-      try {
-        res = await fetch(url, { method, headers: h, body, redirect: 'follow', signal: AbortSignal.timeout(30000) });
-      } catch (e) {
-        throw new CalDAVError(`Could not reach ${new URL(url).host}: ${e.cause?.code || e.message}`, 0);
+      // Redirects are followed by hand so each hop is checked against the destination policy.
+      let at = url;
+      for (let hop = 0; ; hop++) {
+        await destinationPolicy.check?.(at, this.owner);
+        try {
+          res = await fetch(at, { method, headers: h, body, redirect: 'manual', signal: AbortSignal.timeout(30000) });
+        } catch (e) {
+          throw new CalDAVError(`Could not reach ${new URL(at).host}: ${e.cause?.code || e.message}`, 0);
+        }
+        const loc = res.headers.get('location');
+        if (![301, 302, 303, 307, 308].includes(res.status) || !loc) break;
+        if (hop >= 5) throw new CalDAVError('Too many redirects', 0);
+        await res.body?.cancel();
+        const next = new URL(loc, at);
+        if (!/^https?:$/.test(next.protocol)) throw new CalDAVError('Redirected to a non-web address', 0);
+        if (next.origin !== new URL(at).origin) delete h.Authorization; // never send credentials to another server
+        at = next.href;
       }
-      txt = await res.text();
+      txt = await readCapped(res);
       if (res.status !== 401 || !this.learn(res, url, auth)) break;
     }
     if (!ok.includes(res.status)) {

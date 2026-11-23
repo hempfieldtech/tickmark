@@ -4,6 +4,7 @@ import { parseRecurrence, describeRecurrence } from './shared/recur.js';
 import { textStats } from './shared/words.js';
 import { parseFrontmatter, writeFrontmatter } from './shared/frontmatter.js';
 import { highlight } from './shared/highlight.js';
+import { safeUrl } from './shared/url.js';
 import { Vim } from './vim.js';
 import { textMirror, caretXY, lineCol, hue, cursorsHTML } from './shared/caret.js';
 
@@ -118,7 +119,6 @@ function fmtDue(date, time) {
   return time ? `${label} ${time}` : label;
 }
 const dueClass = (date) => (date < today() ? 'overdue' : date === today() ? 'today' : '');
-const safeUrl = (u) => !/^\s*(javascript|vbscript|data):/i.test(u || '');
 
 marked.use({
   gfm: true,
@@ -2848,6 +2848,8 @@ async function clearApiCache() {
 let loginWaiter = null;
 function showLogin(message = '', kind = 'err') {
   const me = S.me || {};
+  // Someone else may sign in on this device: the last user's custom CSS doesn't style the sign-in page.
+  window.tickmarkCss?.apply('');
   $('#login-local').hidden = me.localLogin === false;
   $('#login-sso').hidden = !me.sso;
   $('#login-sso').textContent = me.sso?.label || 'Sign in with SSO';

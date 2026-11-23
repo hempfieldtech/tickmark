@@ -13,6 +13,12 @@ import { History } from './history.js';
 /** How long after a file changes outside Tickmark to sync it (editors often write in several steps). */
 const EXTERNAL_SYNC_DELAY = Number(process.env.TICKMARK_EXTERNAL_SYNC_MS) || 3000;
 
+/** Write to a live stream; one that stopped reading (a megabyte behind) is closed instead. */
+function send(res, msg) {
+  if (res.destroyed) return;
+  if (res.writableLength > 1024 * 1024) { res.destroy(); return; }
+  res.write(msg);
+}
 const covers = (c, rel) => (c.kind === 'note' ? c.path === rel : rel.startsWith(c.path + '/'));
 
 export class Workspace {
@@ -54,6 +60,7 @@ export class Workspace {
     this.sync = new SyncEngine({
       vault: this.vault, index: this.index,
       getConfig: () => this.config.get(),
+      owner: name,
       onStatus: (s) => this.broadcast('sync', s),
       log: (...a) => console.log(name ? `[${name}]` : '', ...a),
     });
@@ -66,9 +73,9 @@ export class Workspace {
 
   broadcast(event, data) {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const res of this.clients) res.write(msg);
+    for (const res of this.clients) send(res, msg);
     // Public pages showing that note (or its folder) reload it.
-    if (event === 'file') for (const c of this.publicClients) if (covers(c, data.path)) c.res.write(`event: change\ndata: ${JSON.stringify({})}\n\n`);
+    if (event === 'file') for (const c of this.publicClients) if (covers(c, data.path)) send(c.res, `event: change\ndata: ${JSON.stringify({})}\n\n`);
   }
 
   // ---- presence
@@ -86,14 +93,20 @@ export class Workspace {
     for (const c of this.publicClients) if (c.kind === 'note' && !this.presence.has(c.pid)) viewers[c.path] = (viewers[c.path] || 0) + 1;
     return { people: [...this.presence.values()].map(({ at, ...p }) => p), publicViewers: viewers };
   }
+  /** Tell everyone who's where, at most every 100 ms however often it changes. */
   broadcastPresence() {
+    if (this.presenceTimer) return;
+    this.presenceTimer = setTimeout(() => { this.presenceTimer = null; this.sendPresence(); }, 100);
+    this.presenceTimer.unref?.();
+  }
+  sendPresence() {
     const state = this.presenceState();
     this.broadcast('presence', state);
     // An editable public page gets the carets in its own note, with nothing else of the instance.
     for (const c of this.publicClients) {
       if (!c.edit || c.kind !== 'note') continue;
       const people = state.people.filter((p) => p.path === c.path).map(({ id, name, device, line, col }) => ({ id, name, device, line, col }));
-      c.res.write(`event: presence\ndata: ${JSON.stringify({ people })}\n\n`);
+      send(c.res, `event: presence\ndata: ${JSON.stringify({ people })}\n\n`);
     }
   }
 

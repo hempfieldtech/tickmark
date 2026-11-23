@@ -398,3 +398,39 @@ test('cancelling a recurring item drops its rule', async () => {
   assert.equal(setTaskState('- [x] Bins 🔁 every day ✅ 2026-12-01', 0, '-'), '- [-] Bins');
   assert.equal(setTaskState('- [ ] Bins 🔁 whenever', 0, '-'), '- [-] Bins 🔁 whenever', 'an unknown rule is just text');
 });
+
+test('links in notes: only schemes that cannot run code', async () => {
+  const { safeUrl } = await import('../public/shared/url.js');
+  for (const ok of ['https://example.com', 'http://x', 'mailto:a@b.c', 'Notes/Plan.md', '#heading', '/s/abc', '?q=1', '']) assert.ok(safeUrl(ok), ok);
+  for (const bad of ['javascript:alert(1)', 'JavaScript:alert(1)', ' javascript:x', 'java\tscript:x', 'java\nscript:x', '\x01javascript:x',
+    'vbscript:x', 'data:text/html,<script>', 'jav\rascript:x', 'file:///etc/passwd']) assert.ok(!safeUrl(bad), JSON.stringify(bad));
+});
+
+test('CalDAV XML: hostile replies parse in linear time, and normal ones as before', async () => {
+  const { parseXML } = await import('../server/caldav.js');
+  const t = Date.now();
+  for (const s of ['<a'.repeat(100000), '<!--'.repeat(100000), '<![CDATA['.repeat(50000), '<a b="'.repeat(50000), '<?'.repeat(100000)]) parseXML(s);
+  assert.ok(Date.now() - t < 1000, `took ${Date.now() - t} ms`);
+  const r = parseXML('<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"><!-- c --><d:response><d:href>/a/</d:href>' +
+    '<d:propstat><d:prop><d:displayname>Tasks &amp; more</d:displayname><x:empty a=\'1\'/><d:raw><![CDATA[<b>]]></d:raw></d:prop></d:propstat></d:response></d:multistatus>');
+  const prop = r.children[0].children[0].children[1].children[0];
+  assert.deepEqual(prop.children.map((c) => c.name), ['displayname', 'empty', 'raw']);
+  assert.equal(prop.children[0].text, 'Tasks & more');
+  assert.equal(prop.children[1].attrs.a, '1');
+  assert.equal(prop.children[2].text, '<b>');
+});
+
+test('private addresses, for who may point CalDAV inside the network', async () => {
+  const { isPrivateAddress } = await import('../server/caldav.js');
+  for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', '::', 'fd00::1', 'fe80::1', '::ffff:192.168.0.1'])
+    assert.ok(isPrivateAddress(ip), ip);
+  for (const ip of ['8.8.8.8', '172.32.0.1', '100.128.0.1', '2606:4700::1111', '::ffff:1.1.1.1']) assert.ok(!isPrivateAddress(ip), ip);
+});
+
+test('"From note:" in a task description is read quickly whatever it holds', () => {
+  const ics = (desc) => `BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:x\r\nSUMMARY:T\r\nDESCRIPTION:${desc}\r\nEND:VTODO\r\nEND:VCALENDAR\r\n`;
+  assert.equal(todoModel(findTodo(parseICS(ics('From note: Work/Plan.md')))).fromNote, 'Work/Plan.md');
+  const t = Date.now();
+  todoModel(findTodo(parseICS(ics('From note:' + ' '.repeat(300000) + 'x'))));
+  assert.ok(Date.now() - t < 500, `took ${Date.now() - t} ms`);
+});

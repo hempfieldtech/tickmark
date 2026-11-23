@@ -160,7 +160,7 @@ export function todoModel(vtodo) {
     tickmarkId: getProp(vtodo, 'X-TICKMARK-ID')?.value || null,
     cancelled: status === 'CANCELLED',
     // Tickmark writes "From note: Folder/Note.md" into the todos it creates.
-    fromNote: (unescapeText(getProp(vtodo, 'DESCRIPTION')?.value || '').match(/^From note:\s*(.+?\.md)\s*$/im) || [])[1] || null,
+    fromNote: (unescapeText(getProp(vtodo, 'DESCRIPTION')?.value || '').slice(0, 20000).match(/^From note:[ \t]*(\S[^\n]*?\.md)[ \t]*$/im) || [])[1] || null,
   };
 }
 

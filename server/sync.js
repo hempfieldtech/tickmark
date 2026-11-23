@@ -63,8 +63,8 @@ function changes(from, to) {
 const COUNTS = ['pushed', 'pulled', 'created', 'imported', 'deletedRemote', 'deletedLocal', 'trashed'];
 
 export class SyncEngine {
-  constructor({ vault, index, getConfig, onStatus = () => {}, log = console.log }) {
-    Object.assign(this, { vault, index, getConfig, onStatus, log });
+  constructor({ vault, index, getConfig, onStatus = () => {}, log = console.log, owner = null }) {
+    Object.assign(this, { vault, index, getConfig, onStatus, log, owner });
     this.status = { state: 'idle', lastRun: null, lastError: null, lastResult: null, needsForce: false };
     this.running = null;
   }
@@ -82,6 +82,7 @@ export class SyncEngine {
         if (failed.length) {
           const e = new Error(failed.map((a) => (r.accounts.length > 1 ? `${a.name}: ${a.error}` : a.error)).join('\n'));
           e.needsForce = failed.some((a) => a.needsForce);
+          e.status = e.needsForce ? 409 : 502;
           e.result = r;
           throw e;
         }
@@ -100,7 +101,7 @@ export class SyncEngine {
   async _run({ force = false } = {}) {
     const cfg = this.getConfig();
     const accounts = (cfg.accounts || []).filter((a) => a.url && a.calendarUrl);
-    if (!accounts.length) throw new Error('CalDAV is not configured (Settings → CalDAV accounts)');
+    if (!accounts.length) throw Object.assign(new Error('CalDAV is not configured (Settings → CalDAV accounts)'), { status: 400 });
     this.setStatus({ state: 'syncing' });
     const tagOpts = {
       itemTags: [...new Set(accounts.flatMap((a) => a.itemTags))],
@@ -246,7 +247,7 @@ export class SyncEngine {
     if (e.ics && acct?.url && acct.calendarUrl && bid === e.block_id) {
       const calUrl = acct.calendarUrl.endsWith('/') ? acct.calendarUrl : acct.calendarUrl + '/';
       try {
-        await new CalDAV(acct).put(new URL(e.href || encodeURIComponent(e.block_id) + '.ics', calUrl).href, e.ics, { create: true });
+        await new CalDAV({ ...acct, owner: this.owner }).put(new URL(e.href || encodeURIComponent(e.block_id) + '.ics', calUrl).href, e.ics, { create: true });
         server = 'restored';
       } catch { /* offline or already there: the next sync re-links or recreates it */ }
     }
@@ -259,7 +260,7 @@ export class SyncEngine {
    *                (tag removed, moved to another account) isn't recorded as deleted.
    */
   async syncAccount(acct, local, { force, tagOpts, result, present = new Set() }) {
-    const client = new CalDAV(acct);
+    const client = new CalDAV({ ...acct, owner: this.owner });
     const calUrl = acct.calendarUrl.endsWith('/') ? acct.calendarUrl : acct.calendarUrl + '/';
     const A = acct.id;
 
@@ -310,6 +311,7 @@ export class SyncEngine {
         const e = new Error(`Refusing to sync: ${Math.max(goneRemote, goneLocal)} of ${states.size} tasks look deleted on the ` +
           `${goneRemote >= goneLocal ? 'CalDAV server' : 'notes side'}. Check your settings, then use “Sync anyway”.`);
         e.needsForce = true;
+        e.status = 409;
         throw e;
       }
     }

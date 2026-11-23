@@ -80,7 +80,9 @@ node server/users.js passwd|remove <name>, or list
 node server/users.js sso-off                          # escape hatch: turn off SSO set up in Settings
 ```
 
-After that, admins add and remove people in Settings → **Users**, and everyone can change their own password in Settings → **Account** (shown to accounts that have a password; **Sign out** is at the bottom of the Settings list). Removing a user leaves their files on disk. Sessions last 30 days; changing a password signs out the user's other devices. Ten wrong passwords from one address lock it out for 15 minutes.
+After that, admins add and remove people in Settings → **Users**, and everyone can change their own password in Settings → **Account** (shown to accounts that have a password; **Sign out** is at the bottom of the Settings list). Removing a user leaves their files on disk. Sessions last 30 days; changing a password signs out the user's other devices. Ten wrong passwords from one address lock it out for 15 minutes. Behind a reverse proxy, set `TICKMARK_TRUST_PROXY=true` so that address is the visitor's, not the proxy's.
+
+**Security notes.** The app's pages only run Tickmark's own scripts (a Content-Security-Policy), links in notes can't run code, and requests that change anything must be JSON from Tickmark's own pages, so other websites can't act for you. With no sign-in at all, Tickmark answers only to IP addresses and local names (set `TICKMARK_ALLOWED_HOSTS` for others), so a web page can't reach it through a name of its own. With several users, only admins can connect a CalDAV account to an address inside the network, unless `TICKMARK_ALLOW_PRIVATE_CALDAV=true`. Public links allow 30 open pages each; removing a link or making it read-only closes the ones open.
 
 `--vault /path` on `users.js add` puts a user's notes somewhere other than `<vault>/<name>`, e.g. an existing Obsidian folder. Vault folders must not overlap.
 
