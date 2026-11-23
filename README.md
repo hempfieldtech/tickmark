@@ -25,6 +25,8 @@ Sign-in and SSO settings are under [Users and sign-in](#users-and-sign-in).
 
 To run it as a service, see `contrib/tickmark.service`.
 
+To sync every user's notes right now from the host (scripts, cron), send the server `SIGUSR2`: `kill -USR2 <pid>`, or `docker kill -s USR2 tickmark`. It logs a `sync on signal: …` line per user and `sync on signal: finished` at the end.
+
 ### Docker
 
 ```sh

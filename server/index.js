@@ -697,6 +697,23 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// `kill -USR2 <pid>` (or `docker kill -s USR2 tickmark`) syncs every user's notes now and logs when
+// each is done: a way to get a current sync from the host without signing in.
+process.on('SIGUSR2', async () => {
+  const names = MULTI ? users.list().map((u) => u.name) : [null];
+  for (const name of names) {
+    const tag = name ? `[${name}] ` : '';
+    let ws;
+    try { ws = workspaceFor(name ?? undefined); } catch (e) { console.log(`${tag}sync on signal: skipped (${e.message})`); continue; }
+    if (!(ws.config.get().accounts || []).some((a) => a.url && a.calendarUrl)) { console.log(`${tag}sync on signal: no CalDAV account`); continue; }
+    try {
+      const r = await ws.sync.run();
+      console.log(`${tag}sync on signal: done (${r.created} created, ${r.pushed} sent, ${r.pulled} received, ${r.imported} imported, ${r.deletedLocal + r.deletedRemote} deleted)`);
+    } catch (e) { console.log(`${tag}sync on signal: failed (${e.message.split('\n')[0]})`); }
+  }
+  console.log('sync on signal: finished');
+});
+
 server.listen(PORT, HOST, () => {
   console.log(`Tickmark on http://${HOST}:${PORT}`);
   console.log(`  vault: ${VAULT}${MULTI ? '/<user>' : ''}`);
