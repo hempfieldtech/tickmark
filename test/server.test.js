@@ -688,3 +688,47 @@ test('live collaboration: presence, gated by sign-in or a public link, and live 
     await b.close();
   } finally { await srv.stop(); }
 });
+
+test('trash: list, restore to where it was, delete forever', async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault') });
+  const { call } = client(srv.base);
+  try {
+    await call('POST', '/api/file', { path: 'Work/Plan.md', content: '# Plan\n' });
+    await call('POST', '/api/file', { path: 'Old.md', content: 'x' });
+    await call('DELETE', '/api/file?path=Work/Plan.md');
+    await call('DELETE', '/api/file?path=Old.md');
+    let list = (await call('GET', '/api/trash')).data;
+    assert.deepEqual(list.map((t) => t.path).sort(), ['Old.md', 'Work/Plan.md']);
+    const plan = list.find((t) => t.path === 'Work/Plan.md');
+    await call('POST', '/api/file', { path: 'Work/Plan.md', content: 'a new one' });
+    assert.equal((await call('POST', '/api/trash/restore', { name: plan.name })).data.path, 'Work/Plan 2.md', 'taken name: restored beside it');
+    assert.equal((await call('GET', '/api/file?path=Work/Plan 2.md')).data.content, '# Plan\n');
+    assert.equal((await call('POST', '/api/trash/restore', { name: '../data' })).status, 400, 'nothing outside .trash');
+    assert.equal((await call('DELETE', '/api/trash?name=all')).data.deleted, 1);
+    assert.deepEqual((await call('GET', '/api/trash')).data, []);
+    assert.match((await call('GET', '/api/version')).data.build, /^[0-9a-f]{12}$/);
+  } finally { await srv.stop(); }
+});
+
+test('public links can let people with the link edit the shared note, and only that', async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault'), TICKMARK_PUBLIC_URL: 'https://notes.example.com' });
+  const { call } = client(srv.base);
+  const anon = client(srv.base).call;
+  try {
+    await call('POST', '/api/file', { path: 'Shared.md', content: '# Shared\n- [ ] One\n' });
+    const sh = (await call('POST', '/api/shares', { path: 'Shared.md' })).data;
+    assert.equal(sh.edit, undefined);
+    assert.equal((await anon('PUT', `/api/public/${sh.token}`, { content: 'hacked' })).status, 403, 'read-only by default');
+    assert.equal((await call('PUT', '/api/shares', { token: sh.token, edit: true })).data.edit, true);
+    assert.equal((await anon('GET', `/api/public/${sh.token}`)).data.edit, true);
+    // Meanwhile the owner changes another line: the public edit merges with it.
+    await call('PUT', '/api/file?path=Shared.md', { content: '# Shared\n- [ ] One\nOwner line\n' });
+    const r = (await anon('PUT', `/api/public/${sh.token}`, { content: '# Shared\n- [x] One\n', baseContent: '# Shared\n- [ ] One\n' })).data;
+    assert.equal(r.content, '# Shared\n- [x] One\nOwner line\n');
+    assert.equal((await call('GET', '/api/file?path=Shared.md')).data.content, '# Shared\n- [x] One\nOwner line\n');
+    await call('PUT', '/api/shares', { token: sh.token, edit: false });
+    assert.equal((await anon('PUT', `/api/public/${sh.token}`, { content: 'x' })).status, 403, 'read-only again');
+  } finally { await srv.stop(); }
+});

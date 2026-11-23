@@ -1,4 +1,5 @@
 // Public share links: a note or a folder, readable by anyone with its link, at <public URL>/s/<token>.
+// The owner can also let people with the link edit (edit: true): they change what's shared, nothing else.
 // Only offered when the instance has a domain-based public URL (TICKMARK_PUBLIC_URL), so links are
 // stable and never point at a LAN address. Stored server-wide in <data>/shares.json.
 
@@ -51,6 +52,15 @@ export class Shares {
     this.data[token] = { owner, path: rel, kind, created: new Date().toISOString() };
     this.save();
     return { token, ...this.data[token] };
+  }
+
+  /** Let people with the link edit (true) or only read (false). */
+  setEdit(owner, token, edit) {
+    const s = this.get(token);
+    if (!s || s.owner !== owner) return null;
+    if (edit) this.data[token].edit = true; else delete this.data[token].edit;
+    this.save();
+    return this.get(token);
   }
 
   remove(owner, token) {

@@ -2,6 +2,7 @@ import { marked } from './vendor/marked.esm.js';
 import { checkboxLines, toggleLine, setTaskState, fileCompleted, openSubtasks, parseTasks, normTag, localDate } from './shared/tasks.js';
 import { parseRecurrence, describeRecurrence } from './shared/recur.js';
 import { textStats } from './shared/words.js';
+import { parseFrontmatter, writeFrontmatter } from './shared/frontmatter.js';
 
 // ---------------------------------------------------------------- utilities
 const $ = (s, root = document) => root.querySelector(s);
@@ -67,20 +68,25 @@ function toast(msg, action) {
   toast.t = setTimeout(() => el.toast.classList.remove('show'), action ? 7000 : 3200);
 }
 
+/** A menu of { label, run, danger } items. An item with `expand(button)` grows inside the menu instead of closing it. */
 function showMenu(anchor, items) {
-  const r = anchor.getBoundingClientRect();
   el.menu.innerHTML = '';
+  el.menu.anchor = anchor;
   for (const it of items) {
     const b = document.createElement('button');
     b.textContent = it.label;
     if (it.danger) b.className = 'danger';
-    b.onclick = () => { hideMenu(); it.run(); };
+    b.onclick = () => { if (it.expand) { it.expand(b); placeMenu(); } else { hideMenu(); it.run(); } };
     el.menu.append(b);
   }
   el.menu.hidden = false;
+  placeMenu();
+}
+function placeMenu() {
+  const r = el.menu.anchor.getBoundingClientRect();
   const mw = el.menu.offsetWidth, mh = el.menu.offsetHeight;
   el.menu.style.left = Math.max(8, Math.min(r.right - mw, innerWidth - mw - 8)) + 'px';
-  el.menu.style.top = (r.bottom + mh + 8 > innerHeight ? r.top - mh - 4 : r.bottom + 4) + 'px';
+  el.menu.style.top = Math.max(8, r.bottom + mh + 8 > innerHeight ? Math.min(r.top - mh - 4, innerHeight - mh - 8) : r.bottom + 4) + 'px';
 }
 const hideMenu = () => { el.menu.hidden = true; };
 document.addEventListener('pointerdown', (e) => { if (!el.menu.hidden && !el.menu.contains(e.target)) hideMenu(); });
@@ -253,7 +259,7 @@ async function embedText(path) {
   embedCache.set(path, { mtime, content: f.content });
   return f.content;
 }
-/** The part of a note under a heading (to the next heading of the same or a higher level). */
+/** The part of a note under a heading (to the next heading of the same or a higher level), and its first line. */
 function sectionOf(text, heading) {
   const lines = text.split('\n');
   const want = heading.trim().toLowerCase();
@@ -261,10 +267,10 @@ function sectionOf(text, heading) {
   for (let i = 0; i < lines.length; i++) {
     const h = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(lines[i]);
     if (!h) continue;
-    if (start >= 0 && h[1].length <= level) return lines.slice(start, i).join('\n');
+    if (start >= 0 && h[1].length <= level) return { text: lines.slice(start, i).join('\n'), start };
     if (start < 0 && h[2].replace(/(^|\s)#[\p{L}\p{N}_/-]+/gu, '').trim().toLowerCase() === want) { start = i; level = h[1].length; }
   }
-  return start >= 0 ? lines.slice(start).join('\n') : null;
+  return start >= 0 ? { text: lines.slice(start).join('\n'), start } : null;
 }
 async function fillEmbeds(root, chain) {
   const path0 = S.path;
@@ -278,19 +284,35 @@ async function fillEmbeds(root, chain) {
     if (!f) { box.classList.add('missing'); body.textContent = 'No such note yet.'; continue; }
     if (chain.includes(f.path) || chain.length > 3) { body.textContent = chain.includes(f.path) ? 'Embeds itself, so it isn\'t shown here.' : 'Nested too deep to show.'; continue; }
     try {
-      let text = (await embedText(f.path)).replace(/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, '');
-      if (heading) text = sectionOf(text, heading) ?? `*No heading “${heading}” in ${basename(f.path)}.*`;
+      const full = await embedText(f.path);
+      let text, lines;
+      if (heading) {
+        const sec = sectionOf(full, heading);
+        text = sec ? sec.text : `*No heading “${heading}” in ${basename(f.path)}.*`;
+        lines = sec ? checkboxLines(sec.text).map((l) => l + sec.start) : [];
+      } else {
+        text = full.replace(/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, '');
+        lines = checkboxLines(full); // skips the frontmatter itself, so line numbers are the file's
+      }
       if (S.path !== path0) return; // moved on to another note meanwhile
       const save = cbIndex;
       body.innerHTML = marked.parse(text);
       cbIndex = save;
-      // Checkboxes in an embed belong to the other note: read-only here.
+      // Checkboxes in an embed edit the other note's line (a click, or right-click for a state).
       drawStates(body);
-      body.querySelectorAll('input[type=checkbox]').forEach((cb) => {
-        cb.disabled = true; cb.classList.remove('task-cb'); cb.classList.add('embed-cb');
-        if (cb.dataset.state === 'progress') cb.indeterminate = true;
-        if (cb.dataset.state === 'cancelled') cb.closest('li')?.classList.add('cancelled-item');
+      body.querySelectorAll('input[type=checkbox]').forEach((cb, i) => {
+        const li = cb.closest('li');
+        cb.className = 'task-cb embed-task';
+        if (lines[i] == null) { cb.disabled = true; return; }
+        cb.dataset.epath = f.path;
+        cb.dataset.line = lines[i];
+        cb.title = `In ${basename(f.path)}`;
+        if (cb.dataset.state === 'progress') { cb.indeterminate = true; li?.classList.add('progress-item'); }
+        if (cb.dataset.state === 'cancelled') li?.classList.add('cancelled-item');
+        if (cb.checked) li?.classList.add('done-item');
       });
+      body.dataset.foldKey = `fold:${S.path}>${box.dataset.target}`;
+      applyFolds(true, body);
       body.querySelectorAll('a.wikilink').forEach((a) => { if (!resolveLink(a.dataset.target)) a.classList.add('missing'); });
       await fillEmbeds(body, [...chain, f.path]);
     } catch (e) { body.textContent = `Couldn't load it: ${e.message}`; }
@@ -299,11 +321,13 @@ async function fillEmbeds(root, chain) {
 
 // ---- collapsible headings in the preview (remembered per note, on this device)
 const foldKey = (h) => `${h.tagName}:${h.textContent.trim()}`;
+/** Where a container's folds are remembered: the note's preview, or an embed inside it. */
+const foldStore = (root) => (root === el.preview ? 'fold:' + S.path : root.dataset.foldKey);
 /** Hide what's under each collapsed heading, up to the next heading of the same or a higher level. */
-function applyFolds(addButtons = false) {
-  const folded = new Set(store.get('fold:' + S.path, []));
+function applyFolds(addButtons = false, root = el.preview) {
+  const folded = new Set(store.get(foldStore(root), []));
   let hideBelow = 0; // while > 0, hide everything until a heading of this level or higher
-  for (const node of el.preview.children) {
+  for (const node of root.children) {
     const lvl = /^H([1-6])$/.exec(node.tagName)?.[1];
     if (lvl && addButtons && !node.querySelector(':scope > .fold')) {
       const b = document.createElement('button');
@@ -324,11 +348,26 @@ function applyFolds(addButtons = false) {
   }
 }
 function toggleFold(h) {
+  const root = h.parentElement, key = foldStore(root);
+  if (!key) return;
   const k = foldKey(h);
-  const folded = new Set(store.get('fold:' + S.path, []));
+  const folded = new Set(store.get(key, []));
   if (folded.has(k)) folded.delete(k); else folded.add(k);
-  if (folded.size) store.set('fold:' + S.path, [...folded]); else store.del('fold:' + S.path);
-  applyFolds();
+  if (folded.size) store.set(key, [...folded]); else store.del(key);
+  applyFolds(false, root);
+}
+
+/** Change a line in an embedded note (a checkbox clicked in its embed), then show the result. */
+async function editEmbedded(path, fn) {
+  try {
+    const f = await api('GET', `/api/file?path=${enc(path)}`);
+    const next = fn(f.content);
+    if (next === f.content) return;
+    await api('PUT', `/api/file?path=${enc(path)}`, { content: next, baseContent: f.content });
+    embedCache.delete(path);
+    renderPreview();
+    scheduleSync(1500);
+  } catch (e) { toast(`Couldn't change ${basename(path)}: ${e.message}`); }
 }
 const schedulePreview = (() => { let raf = 0; return () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderPreview); }; })();
 
@@ -384,7 +423,9 @@ function setTaskStateFiled(text, lineNo, ch) {
     if (open && parseTasks(text, tagOpts()).some((t) => t.line === lineNo && t.synced)) { toast(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`); return text; }
   }
   const next = setTaskState(text, lineNo, ch);
-  if (S.config?.moveCompleted === false || 'xX-'.includes(ch) === 'xX-'.includes(was)) return next;
+  // Filed again when it opens, finishes, or switches between done and cancelled (Complete ⇄ Cancelled).
+  const kind = (c) => (c === '-' ? 'cancelled' : 'xX'.includes(c) ? 'done' : 'open');
+  if (S.config?.moveCompleted === false || kind(ch) === kind(was)) return next;
   return fileCompleted(next, lineNo) ?? next;
 }
 
@@ -449,23 +490,73 @@ function caretXY(ta, pos) {
   return out;
 }
 function closeSuggest() { suggest.box?.remove(); suggest.box = null; suggest.items = []; }
+
+// ---- :shortcodes: for task metadata. Typing ":cal" offers 📅 and friends; ":calendar:" turns into it.
+const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return localDate(d); };
+const SHORTCODES = [
+  { code: 'calendar', alias: ['due', 'date'], emoji: '📅', label: 'Due today', text: () => `📅 ${today()}`, select: 'date' },
+  { code: 'tomorrow', emoji: '📅', label: 'Due tomorrow', text: () => `📅 ${addDays(1)}`, select: 'date' },
+  { code: 'nextweek', emoji: '📅', label: 'Due in a week', text: () => `📅 ${addDays(7)}`, select: 'date' },
+  { code: 'recur', alias: ['repeat', 'every'], emoji: '🔁', label: 'Repeats…', text: () => '🔁 every ' },
+  { code: 'highest', emoji: '🔺', label: 'Highest priority', text: () => '🔺' },
+  { code: 'high', alias: ['priority'], emoji: '⏫', label: 'High priority', text: () => '⏫' },
+  { code: 'medium', emoji: '🔼', label: 'Medium priority', text: () => '🔼' },
+  { code: 'low', emoji: '🔽', label: 'Low priority', text: () => '🔽' },
+  { code: 'lowest', emoji: '⏬', label: 'Lowest priority', text: () => '⏬' },
+  { code: 'done', emoji: '✅', label: 'Done today', text: () => `✅ ${today()}`, select: 'date' },
+];
+const SHORT_RE = /(^|[\s(])(:([a-z]{1,12}))$/i;
+function insertShortcode(sc, start, end) {
+  const ed = el.editor;
+  const t = sc.text(), after = ed.value[end];
+  const pad = sc.select || t.endsWith(' ') || after === ' ' ? '' : ' ';
+  replaceRange(start, end, t + pad);
+  // A date comes out selected, so typing replaces it.
+  if (sc.select === 'date') { const d = start + t.lastIndexOf(' ') + 1; ed.setSelectionRange(d, d + 10); }
+}
+// Typing the closing colon of a full code converts it straight away.
+el.editor.addEventListener('input', (e) => {
+  if (!e.data?.endsWith(':')) return;
+  const ed = el.editor, pos = ed.selectionStart;
+  const m = /(^|[\s(]):([a-z]{2,12}):$/i.exec(ed.value.slice(Math.max(0, pos - 16), pos));
+  const sc = m && SHORTCODES.find((x) => x.code === m[2].toLowerCase() || x.alias?.includes(m[2].toLowerCase()));
+  if (sc) { closeSuggest(); insertShortcode(sc, pos - m[2].length - 2, pos); }
+});
+
 function updateSuggest() {
   const ed = el.editor;
   if (ed.selectionStart !== ed.selectionEnd) return closeSuggest();
   const pos = ed.selectionStart;
   const before = ed.value.slice(ed.value.lastIndexOf('\n', pos - 1) + 1, pos);
+  const sm = !/\[\[[^\]]*$/.test(before) && SHORT_RE.exec(before);
+  if (sm) {
+    const q = sm[3].toLowerCase();
+    const hits = SHORTCODES.filter((x) => x.code.startsWith(q) || x.alias?.some((a) => a.startsWith(q)));
+    if (!hits.length) return closeSuggest();
+    suggest.mode = 'code';
+    suggest.items = hits;
+    suggest.start = pos - sm[2].length;
+    suggest.i = Math.min(suggest.i, hits.length - 1);
+    renderSuggestBox(hits.map((x) => `${x.emoji} ${esc(x.label)} <span class="dir">:${x.code}:</span>`));
+    return;
+  }
   const m = /\[\[([^\]|#^\n]*)$/.exec(before);
   if (!m) return closeSuggest();
   const q = m[1].trim().toLowerCase();
-  const scored = S.files.filter((f) => f.path !== S.path).map((f) => {
+  const scored = S.files.filter((f) => f.path !== S.path && !isTemplate(f.path)).map((f) => {
     const name = basename(f.path).toLowerCase(), full = f.path.toLowerCase();
     const score = !q ? 3 : name.startsWith(q) ? 0 : name.includes(q) ? 1 : full.includes(q) ? 2 : -1;
     return { f, score };
   }).filter((x) => x.score >= 0).sort((a, b) => a.score - b.score || basename(a.f.path).localeCompare(basename(b.f.path))).slice(0, 8);
   if (!scored.length) return closeSuggest();
+  suggest.mode = 'link';
   suggest.items = scored.map((x) => x.f.path);
   suggest.start = pos - m[1].length;
   suggest.i = Math.min(suggest.i, suggest.items.length - 1);
+  renderSuggestBox(suggest.items.map((p) => `${esc(basename(p))}${dirname(p) ? ` <span class="dir">${esc(dirname(p))}</span>` : ''}`));
+}
+function renderSuggestBox(rows) {
+  const ed = el.editor;
   if (!suggest.box) {
     suggest.box = document.createElement('div');
     suggest.box.className = 'menu suggest';
@@ -476,13 +567,17 @@ function updateSuggest() {
     });
     document.body.append(suggest.box);
   }
-  suggest.box.innerHTML = suggest.items.map((p, i) => `<button type="button" role="option" data-i="${i}" aria-selected="${i === suggest.i}">` +
-    `${esc(basename(p))}${dirname(p) ? ` <span class="dir">${esc(dirname(p))}</span>` : ''}</button>`).join('');
+  suggest.box.innerHTML = rows.map((html, i) => `<button type="button" role="option" data-i="${i}" aria-selected="${i === suggest.i}">${html}</button>`).join('');
   const c = caretXY(ed, suggest.start);
   const top = c.y + c.h + 4, below = top + suggest.box.offsetHeight < innerHeight;
   Object.assign(suggest.box.style, { left: `${Math.min(c.x, innerWidth - suggest.box.offsetWidth - 8)}px`, top: `${below ? top : c.y - suggest.box.offsetHeight - 4}px` });
 }
 function pickSuggest(i) {
+  if (suggest.mode === 'code') {
+    const sc = suggest.items[i];
+    if (sc) { const end = el.editor.selectionStart; closeSuggest(); insertShortcode(sc, suggest.start, end); }
+    return;
+  }
   const path = suggest.items[i];
   if (!path) return;
   const ed = el.editor, name = basename(path);
@@ -551,10 +646,11 @@ el.editor.addEventListener('keydown', (e) => {
   } else if (mod && e.key.toLowerCase() === 'l') {
     e.preventDefault();
     const { selectionStart: s, value: v } = ed;
-    const lineNo = v.slice(0, s).split('\n').length - 1;
     const [ls, le] = lineBounds(v, s);
     const line = v.slice(ls, le);
-    if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ xX]\]/.test(line)) applyEdit(toggleTask(v, lineNo));
+    // A checklist item stops being one (back to the plain line); anything else becomes one.
+    const cb = line.match(/^(\s*(?:>\s*)*)(?:[-*+]|\d+[.)])\s+\[[ xX/-]\]\s?/);
+    if (cb) replaceRange(ls + cb[1].length, ls + cb[0].length, '');
     else {
       const m = line.match(/^(\s*(?:>\s*)*)([-*+]|\d+[.)])\s+/);
       if (m) replaceRange(ls + m[0].length, ls + m[0].length, '[ ] ');
@@ -575,9 +671,10 @@ el.editor.addEventListener('scroll', () => {
 el.preview.addEventListener('contextmenu', (e) => {
   const cb = e.target.closest('input.task-cb');
   const line = cb && Number(cb.dataset.line);
-  if (!cb || Number.isNaN(line)) return;
+  if (!cb || cb.disabled || Number.isNaN(line)) return;
   e.preventDefault();
-  const pick = (ch) => () => applyEdit(setTaskStateFiled(el.editor.value, line, ch));
+  const epath = cb.dataset.epath;
+  const pick = (ch) => () => (epath ? editEmbedded(epath, (t) => setTaskStateFiled(t, line, ch)) : applyEdit(setTaskStateFiled(el.editor.value, line, ch)));
   showMenu(cb, [
     { label: 'To do  [ ]', run: pick(' ') }, { label: 'In progress  [/]', run: pick('/') },
     { label: 'Done  [x]', run: pick('x') }, { label: 'Cancelled  [-]', run: pick('-') },
@@ -590,7 +687,9 @@ el.preview.addEventListener('click', (e) => {
   if (cb) {
     e.preventDefault();
     const line = Number(cb.dataset.line);
-    if (!Number.isNaN(line)) applyEdit(toggleTask(el.editor.value, line));
+    if (Number.isNaN(line)) return;
+    if (cb.dataset.epath) editEmbedded(cb.dataset.epath, (t) => toggleTask(t, line));
+    else applyEdit(toggleTask(el.editor.value, line));
     return;
   }
   const wl = e.target.closest('a.wikilink');
@@ -719,8 +818,31 @@ async function flushSave() {
 }
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') flushSave();
-  else if (syncConfigured() && Date.now() - S.lastSyncAt > 60000) runSync();
+  else {
+    checkForUpdate();
+    if (syncConfigured() && Date.now() - S.lastSyncAt > 60000) runSync();
+  }
 });
+
+// ---- staying current: an installed app (on a phone especially) can sit open for days. When you come
+// back to it, ask the server which version it runs, and reload into it if that's not this one.
+const BUILD = document.querySelector('meta[name="tickmark-build"]')?.content || 'dev';
+async function checkForUpdate() {
+  if (BUILD === 'dev' || Date.now() - (checkForUpdate.at || 0) < 30000) return;
+  checkForUpdate.at = Date.now();
+  let build;
+  try { build = (await (await fetch('/api/version', { cache: 'no-store' })).json()).build; } catch { return; } // offline
+  if (!build || build === BUILD) return;
+  navigator.serviceWorker?.getRegistration().then((r) => r?.update()).catch(() => {});
+  // Reload once per new version; if the page still comes back old, offer it rather than loop.
+  let tried = null;
+  try { tried = sessionStorage.getItem('tickmark:reloadedFor'); } catch {}
+  if (tried === build) return toast('A new version of Tickmark is available', { label: 'Reload', run: () => location.reload() });
+  await flushSave();
+  if (S.mode === 'note' && el.editor.value !== S.base) return; // couldn't save (offline): try again later
+  try { sessionStorage.setItem('tickmark:reloadedFor', build); } catch {}
+  location.reload();
+}
 addEventListener('pagehide', () => {
   if (S.mode === 'note' && S.path && el.editor.value !== S.base) {
     fetch(`/api/file?path=${enc(S.path)}`, {
@@ -733,6 +855,7 @@ addEventListener('pagehide', () => {
 // ---------------------------------------------------------------- opening notes
 async function open(path, { line = null, push = true } = {}) {
   if (!path) return;
+  if (path !== S.path && !closeProps()) return;
   await flushSave();
   let file;
   try { file = await api('GET', `/api/file?path=${enc(path)}`); } catch (e) {
@@ -865,8 +988,9 @@ function buildTree() {
     }
     return n;
   };
-  for (const f of S.folders) node(f);
-  for (const f of S.files) node(dirname(f.path)).files.push(f);
+  // The Templates folder is managed in Settings → Templates, not the sidebar.
+  for (const f of S.folders) if (!isTemplateDir(f)) node(f);
+  for (const f of S.files) if (!isTemplate(f.path)) node(dirname(f.path)).files.push(f);
   return root;
 }
 
@@ -1043,11 +1167,12 @@ $('#btn-more').onclick = (e) => {
       { label: 'Rename', run: () => { el.title.focus(); el.title.select(); } },
     ] : []),
     ...(note ? [{ label: 'Share…', run: () => openShare(S.path, false) }] : []),
+    ...(note ? [{ label: 'Properties…', run: () => openProps() }] : []),
     ...(note ? [{ label: 'History…', run: () => openHistory() }] : []),
-    ...(note ? [{ label: 'Apply template…', run: () => applyTemplateMenu() }] : []),
+    ...(note ? [{ label: 'Apply template…', expand: (b) => expandTemplatePicker(b) }] : []),
     ...(note && !isTemplate(S.path) ? [{ label: 'Save as template…', run: () => saveAsTemplate() }] : []),
     { label: 'Sync now', run: () => runSync({ manual: true }) },
-    ...(note ? [{ label: 'Deleted tasks in this note…', run: () => openDeleted({ path: S.path }) }] : [{ label: 'Deleted tasks…', run: () => openDeleted() }]),
+    ...(note ? [{ label: 'Deleted tasks in this note…', run: () => openDeleted({ path: S.path }) }] : [{ label: 'Deleted tasks…', run: () => openSettings('deleted') }]),
     { label: 'Theme…', run: () => openSettings('appearance') },
     ...(note ? [{ label: 'Move to trash', danger: true, run: () => trashPath(S.path, false) }] : []),
   ]);
@@ -1058,13 +1183,13 @@ const runSearch = debounce(async () => {
   const q = el.search.value.trim();
   if (!q) { el.results.hidden = true; el.tree.hidden = false; return; }
   const ql = q.toLowerCase();
-  const byName = S.files.filter((f) => f.path.toLowerCase().includes(ql)).slice(0, 10);
+  const byName = S.files.filter((f) => !isTemplate(f.path) && f.path.toLowerCase().includes(ql)).slice(0, 10);
   let byText = [];
   try { byText = await api('GET', `/api/search?q=${enc(q)}`); } catch {}
   const seen = new Set(byName.map((f) => f.path));
   const items = [
     ...byName.map((f) => ({ path: f.path, snippet: dirname(f.path) ? esc(dirname(f.path)) : '' })),
-    ...byText.filter((r) => !seen.has(r.path)).map((r) => ({ path: r.path, snippet: esc(r.snippet).replace(/&lt;(\/?)mark&gt;/g, '<$1mark>') })),
+    ...byText.filter((r) => !seen.has(r.path) && !isTemplate(r.path)).map((r) => ({ path: r.path, snippet: esc(r.snippet).replace(/&lt;(\/?)mark&gt;/g, '<$1mark>') })),
   ];
   el.results.innerHTML = items.length
     ? items.map((r) => `<div class="sr-item" data-path="${esc(r.path)}"><div class="p">${esc(basename(r.path))}</div><div class="s">${r.snippet}</div></div>`).join('')
@@ -1091,9 +1216,10 @@ function fuzzy(q, s) {
 }
 function renderSwitcher() {
   const q = sw.input.value.trim();
+  const files = S.files.filter((f) => !isTemplate(f.path));
   sw.items = (q
-    ? S.files.map((f) => ({ f, s: fuzzy(q, basename(f.path)) * 2 + Math.max(0, fuzzy(q, f.path)) })).filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).map((x) => x.f)
-    : [...S.files].sort((a, b) => b.mtime - a.mtime)).slice(0, 50);
+    ? files.map((f) => ({ f, s: fuzzy(q, basename(f.path)) * 2 + Math.max(0, fuzzy(q, f.path)) })).filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).map((x) => x.f)
+    : [...files].sort((a, b) => b.mtime - a.mtime)).slice(0, 50);
   sw.sel = Math.min(sw.sel, Math.max(0, sw.items.length - 1));
   sw.list.innerHTML = sw.items.map((f, i) => `<li data-i="${i}" class="${i === sw.sel ? 'sel' : ''}">${esc(basename(f.path))}<span class="dir">${esc(dirname(f.path))}</span></li>`).join('') +
     (q && !sw.items.some((f) => basename(f.path).toLowerCase() === q.toLowerCase()) ? `<li data-new="1" class="${sw.items.length ? '' : 'sel'}">Create “${esc(q)}”</li>` : '');
@@ -1285,7 +1411,10 @@ async function discover(box) {
 
 // The settings pane: a menu of sections. CalDAV accounts and Sync share one form and Save button;
 // the others act immediately (account, users) or have their own Save (single sign-on).
-const SECTIONS = { caldav: 'CalDAV accounts', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', help: 'Help', shares: 'Public links' };
+const SECTIONS = {
+  caldav: 'CalDAV accounts', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', help: 'Help',
+  shares: 'Public links', deleted: 'Deleted tasks', templates: 'Templates', trash: 'Trash',
+};
 const setDlg = $('#dlg-settings');
 const isMulti = () => S.me?.mode === 'multi' && !!S.me.user;
 const isAdmin = () => isMulti() && !!S.me.user.admin;
@@ -1314,6 +1443,9 @@ function showSection(sec) {
   if (sec === 'appearance') { renderThemes(); renderCssEditor(); renderBranding(); }
   if (sec === 'shares') loadShares();
   if (sec === 'help') loadReadme();
+  if (sec === 'deleted') loadDeleted('set');
+  if (sec === 'templates') renderTemplates();
+  if (sec === 'trash') loadTrash();
 }
 setDlg.querySelectorAll('.set-nav [data-sec]').forEach((b) => (b.onclick = () => showSection(b.dataset.sec)));
 setDlg.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { e.preventDefault(); showSection(g.dataset.goto); } });
@@ -1372,6 +1504,20 @@ async function loadReadme() {
     cbIndex = 0;
     box.innerHTML = marked.parse(markdown);
     box.querySelectorAll('input').forEach((i) => (i.disabled = true));
+    // A table of contents from the README's sections, at the top.
+    const heads = [...box.querySelectorAll('h2')];
+    if (heads.length > 2) {
+      const toc = document.createElement('nav');
+      toc.className = 'toc';
+      toc.setAttribute('aria-label', 'Contents');
+      toc.innerHTML = '<h4>Contents</h4><ul>' + heads.map((h) => {
+        const subs = [];
+        for (let n = h.nextElementSibling; n && n.tagName !== 'H2'; n = n.nextElementSibling) if (n.tagName === 'H3') subs.push(n);
+        const link = (x) => `<a href="#${esc(slug(x.textContent))}">${esc(x.textContent)}</a>`;
+        return `<li>${link(h)}${subs.length ? `<ul>${subs.map((x) => `<li>${link(x)}</li>`).join('')}</ul>` : ''}</li>`;
+      }).join('') + '</ul>';
+      heads[0].before(toc); // after the introduction
+    }
     box.querySelectorAll('a[href]').forEach((a) => {
       const h = a.getAttribute('href');
       if (h.startsWith('#')) { // in-page links: scroll within the settings pane
@@ -1387,6 +1533,82 @@ async function loadReadme() {
   } catch (e) { box.innerHTML = `<p class="note err">${esc(e.message)}</p>`; }
 }
 const slug = (t) => t.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-');
+
+// ---- Properties: the note's frontmatter as a form in a side panel; nothing is written until Save
+const props = { el: $('#props'), rows: $('#props-rows'), path: null, hidden: [], start: '' };
+const KIND_HINT = { list: 'list', inline: 'list', raw: 'YAML, kept as written' };
+function propRow(e = { key: '', kind: 'text', value: '' }) {
+  const row = document.createElement('div');
+  row.className = 'prop-row';
+  row.dataset.kind = e.kind;
+  if (e.indent) row.dataset.indent = e.indent;
+  const val = e.kind === 'raw' ? `<textarea class="prop-val" spellcheck="false" aria-label="Value">${esc(e.value)}</textarea>`
+    : `<input class="prop-val" aria-label="Value" value="${esc(Array.isArray(e.value) ? e.value.join(', ') : e.value)}" spellcheck="false">`;
+  row.innerHTML = `<input class="prop-key" aria-label="Property name" placeholder="name" value="${esc(e.key)}" spellcheck="false">${val}` +
+    `<button type="button" class="icon-btn" data-act="del" aria-label="Remove property" title="Remove"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>` +
+    (KIND_HINT[e.kind] ? `<span class="prop-kind">${KIND_HINT[e.kind]}</span>` : '');
+  row.querySelector('[data-act="del"]').onclick = () => { row.remove(); propsState(); };
+  // An untouched list keeps its items exactly (an item may contain a comma).
+  row.orig = { shown: row.querySelector('.prop-val').value, value: e.value };
+  return row;
+}
+/** The panel's rows as frontmatter entries (comments and blank lines from the file are kept, at the top). */
+function propEntries() {
+  const out = [...props.hidden];
+  for (const row of props.rows.children) {
+    const key = row.querySelector('.prop-key').value.trim();
+    const raw = row.querySelector('.prop-val').value;
+    if (!key) continue;
+    const kind = row.dataset.kind;
+    const value = kind === 'list' || kind === 'inline'
+      ? (raw === row.orig?.shown ? row.orig.value : raw.split(',').map((x) => x.trim()).filter(Boolean))
+      : kind === 'raw' ? raw : raw.trim();
+    out.push({ key, kind, value, indent: row.dataset.indent });
+  }
+  return out;
+}
+const propsSnapshot = () => JSON.stringify(propEntries());
+function propsState(msg) {
+  const keys = [...props.rows.querySelectorAll('.prop-key')].map((i) => i.value.trim()).filter(Boolean);
+  const dupe = keys.find((k, i) => keys.indexOf(k) !== i);
+  const bad = keys.find((k) => /[:#]/.test(k) || /^-/.test(k));
+  $('#props-state').textContent = msg || (dupe ? `“${dupe}” is there twice` : bad ? `“${bad}” can't be a name` : propsSnapshot() !== props.start ? 'Not saved yet' : '');
+  $('#btn-props-save').disabled = !!(dupe || bad) || propsSnapshot() === props.start;
+}
+function openProps() {
+  if (S.mode !== 'note') return;
+  const fm = parseFrontmatter(el.editor.value);
+  props.path = S.path;
+  props.hidden = fm.entries.filter((e) => e.key == null && e.value.trim()); // comments
+  props.rows.innerHTML = '';
+  for (const e of fm.entries.filter((x) => x.key != null)) props.rows.append(propRow(e));
+  props.start = propsSnapshot();
+  props.el.hidden = false;
+  propsState();
+  (props.rows.querySelector('.prop-val') || $('#btn-props-add')).focus();
+}
+function closeProps(force = false) {
+  if (props.el.hidden) return true;
+  if (!force && propsSnapshot() !== props.start && !confirm('Discard the changes to these properties?')) return false;
+  props.el.hidden = true;
+  return true;
+}
+props.rows.addEventListener('input', () => propsState());
+$('#btn-props-add').onclick = () => { const r = propRow(); props.rows.append(r); r.querySelector('.prop-key').focus(); propsState(); };
+$('#btn-props-close').onclick = () => closeProps();
+$('#btn-props-cancel').onclick = () => closeProps(true);
+$('#btn-props-save').onclick = () => {
+  if (S.path !== props.path) return toast('That note is no longer open');
+  // Rebuilt on the note as it is now, so anything typed in the editor meanwhile is kept.
+  const body = parseFrontmatter(el.editor.value).body;
+  applyEdit(writeFrontmatter(body, propEntries()));
+  props.start = propsSnapshot();
+  propsState('Saved');
+};
+props.el.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); closeProps(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); e.stopPropagation(); if (!$('#btn-props-save').disabled) $('#btn-props-save').click(); }
+});
 
 // ---- note history (git on the server)
 const histDlg = $('#dlg-history');
@@ -1437,6 +1659,70 @@ $('#btn-history-restore').onclick = async () => {
 // ---- note templates: notes in the Templates folder (their checklist items never sync)
 const TEMPLATES = 'Templates';
 const isTemplate = (p) => !!p && p.toLowerCase().startsWith(TEMPLATES.toLowerCase() + '/');
+const isTemplateDir = (p) => !!p && (p.toLowerCase() === TEMPLATES.toLowerCase() || isTemplate(p));
+const templates = () => S.files.filter((f) => isTemplate(f.path)).sort((a, b) => cmp(a.path, b.path));
+const templateName = (p) => p.slice(TEMPLATES.length + 1).replace(/\.md$/i, '');
+
+// ---- Settings → Templates: list, create, edit, rename and delete them
+const tpl = { editing: null, base: '' }; // editing: the template's path, or '' for a new one
+function renderTemplates() {
+  const list = templates(), ul = $('#tpl-list');
+  $('#tpl-empty').hidden = list.length > 0;
+  ul.hidden = !list.length;
+  ul.innerHTML = '';
+  for (const f of list) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="who">${esc(templateName(f.path))}</span>` +
+      `<button type="button" class="btn" data-act="edit">Edit</button><button type="button" class="btn danger" data-act="del">Delete</button>`;
+    li.querySelector('.who').onclick = li.querySelector('[data-act="edit"]').onclick = () => editTemplate(f.path);
+    li.querySelector('[data-act="del"]').onclick = async () => {
+      if (!confirm(`Delete the template “${templateName(f.path)}”? It goes to the trash (Settings → Trash).`)) return;
+      try { await api('DELETE', `/api/file?path=${enc(f.path)}`); if (tpl.editing === f.path) closeTemplateEditor(); await loadTree(); renderTemplates(); } catch (e) { toast(e.message); }
+    };
+    ul.append(li);
+  }
+}
+async function editTemplate(path) {
+  if (!closeTemplateEditor()) return;
+  let content = '';
+  if (path) { try { content = (await api('GET', `/api/file?path=${enc(path)}`)).content; } catch (e) { return toast(e.message); } }
+  tpl.editing = path; tpl.base = content;
+  $('#tpl-name').value = path ? templateName(path) : '';
+  $('#tpl-content').value = content;
+  $('#tpl-state').textContent = '';
+  $('#tpl-edit').hidden = false;
+  $('#tpl-edit').scrollIntoView({ block: 'nearest' });
+  (path ? $('#tpl-content') : $('#tpl-name')).focus();
+}
+function closeTemplateEditor() {
+  if ($('#tpl-edit').hidden) return true;
+  const dirty = $('#tpl-content').value !== tpl.base || (tpl.editing && $('#tpl-name').value.trim() !== templateName(tpl.editing));
+  if (dirty && !confirm('Discard the changes to this template?')) return false;
+  $('#tpl-edit').hidden = true;
+  tpl.editing = null;
+  return true;
+}
+$('#btn-tpl-new').onclick = () => editTemplate('');
+$('#btn-tpl-cancel').onclick = () => { tpl.base = $('#tpl-content').value; tpl.editing && ($('#tpl-name').value = templateName(tpl.editing)); closeTemplateEditor(); };
+$('#btn-tpl-save').onclick = async () => {
+  const name = $('#tpl-name').value.trim();
+  if (!name) return $('#tpl-name').focus();
+  if (/[\\/]/.test(name) || name.startsWith('.')) return toast('A template name can\'t contain / or \\ or start with a dot');
+  const path = `${TEMPLATES}/${name}.md`, content = $('#tpl-content').value;
+  try {
+    if (!tpl.editing) await api('POST', '/api/file', { path, content });
+    else {
+      if (tpl.editing !== path) await api('POST', '/api/rename', { from: tpl.editing, to: path });
+      await api('PUT', `/api/file?path=${enc(path)}`, { content, baseContent: tpl.base });
+    }
+    tpl.editing = path; tpl.base = content;
+    $('#tpl-state').textContent = 'Saved';
+    await loadTree();
+    renderTemplates();
+  } catch (e) { toast(e.status === 409 ? `There's already a template called “${name}”` : e.message); }
+};
+setDlg.addEventListener('cancel', (e) => { if (!closeTemplateEditor()) e.preventDefault(); });
+setDlg.addEventListener('close', () => { $('#tpl-edit').hidden = true; tpl.editing = null; });
 function fillTemplate(text) {
   const now = new Date();
   const vars = {
@@ -1445,10 +1731,38 @@ function fillTemplate(text) {
   };
   return text.replace(/\{\{\s*(date|time|datetime|title)\s*\}\}/gi, (_, k) => vars[k.toLowerCase()]);
 }
-function applyTemplateMenu() {
-  const list = S.files.filter((f) => isTemplate(f.path)).sort((a, b) => a.path.localeCompare(b.path));
-  if (!list.length) return toast(`No templates yet. Put notes in a “${TEMPLATES}” folder, or use Save as template.`);
-  showMenu($('#btn-more'), list.map((f) => ({ label: f.path.slice(TEMPLATES.length + 1).replace(/\.md$/i, ''), run: () => applyTemplate(f.path) })));
+/** ⋯ → Apply template…: the menu item opens into a search box and the matching templates, in the menu itself. */
+function expandTemplatePicker(btn) {
+  const list = templates();
+  const box = document.createElement('div');
+  box.className = 'menu-pick';
+  if (!list.length) {
+    box.innerHTML = `<p class="note">No templates yet. Make one in Settings → Templates, or with Save as template.</p>`;
+    btn.replaceWith(box);
+    return;
+  }
+  box.innerHTML = `<input type="search" placeholder="Search templates" aria-label="Search templates" autocomplete="off" spellcheck="false"><div class="menu-pick-list" role="listbox"></div>`;
+  btn.replaceWith(box);
+  const input = box.querySelector('input'), out = box.querySelector('.menu-pick-list');
+  let shown = [], sel = 0;
+  const render = () => {
+    const q = input.value.trim().toLowerCase();
+    shown = list.filter((f) => templateName(f.path).toLowerCase().includes(q));
+    sel = Math.min(sel, Math.max(0, shown.length - 1));
+    out.innerHTML = shown.length ? shown.map((f, i) => `<button type="button" role="option" data-i="${i}" aria-selected="${i === sel}">${esc(templateName(f.path))}</button>`).join('')
+      : '<p class="note">No match</p>';
+    placeMenu();
+  };
+  const pick = (i) => { const f = shown[i]; if (f) { hideMenu(); applyTemplate(f.path); } };
+  input.addEventListener('input', () => { sel = 0; render(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); sel = (sel + (e.key === 'ArrowDown' ? 1 : shown.length - 1)) % Math.max(1, shown.length); render(); }
+    else if (e.key === 'Enter') { e.preventDefault(); pick(sel); }
+    else if (e.key === 'Escape') { e.preventDefault(); hideMenu(); }
+  });
+  out.addEventListener('click', (e) => { const b = e.target.closest('button[data-i]'); if (b) pick(+b.dataset.i); });
+  render();
+  input.focus();
 }
 async function applyTemplate(path) {
   let text;
@@ -1477,7 +1791,7 @@ async function saveAsTemplate() {
     try { await api('PUT', `/api/file?path=${enc(path)}`, { content: el.editor.value }); } catch (e2) { return toast(e2.message); }
   }
   await loadTree();
-  toast(`Saved as template “${name.trim()}”. Use {{date}}, {{time}} or {{title}} in it to fill those in.`);
+  toast(`Saved as template “${name.trim()}” (Settings → Templates). Use {{date}}, {{time}} or {{title}} in it to fill those in.`);
 }
 
 // ---- public links
@@ -1487,9 +1801,7 @@ async function openShare(path, folder) {
   Object.assign(shareState, { path, folder, share: null });
   const name = folder ? path.split('/').pop() : basename(path);
   $('#share-title').textContent = `Share “${name}”`;
-  $('#share-what').textContent = folder
-    ? 'Anyone with the link can read every note in this folder, including notes added later. They can\'t change anything or see your other notes.'
-    : 'Anyone with the link can read this note. They can\'t change it or see your other notes.';
+  shareWhat();
   $('#share-off').hidden = $('#share-on').hidden = true;
   $('#share-blocked').hidden = true;
   if (!shareDlg.open) shareDlg.showModal();
@@ -1499,12 +1811,27 @@ async function openShare(path, folder) {
   shareState.share = r.shares.find((x) => x.path === path && x.kind === (folder ? 'folder' : 'note')) || null;
   renderShare();
 }
+function shareWhat() {
+  const edit = !!shareState.share?.edit, folder = shareState.folder;
+  $('#share-what').textContent = folder
+    ? `Anyone with the link can read${edit ? ' and edit' : ''} every note in this folder, including notes added later. ${edit ? 'They can\'t create, rename or delete notes, or' : 'They can\'t change anything or'} see your other notes.`
+    : `Anyone with the link can read${edit ? ' and edit' : ''} this note. ${edit ? 'Their edits merge with yours as they type. They can\'t' : 'They can\'t change it or'} see your other notes.`;
+}
 function renderShare() {
   const sh = shareState.share;
   $('#share-off').hidden = !!sh;
   $('#share-on').hidden = !sh;
-  if (sh) { $('#share-url').value = sh.url; $('#share-open').href = sh.url; }
+  if (sh) { $('#share-url').value = sh.url; $('#share-open').href = sh.url; $('#share-edit').checked = !!sh.edit; }
+  shareWhat();
 }
+$('#share-edit').onchange = async (e) => {
+  const want = e.target.checked;
+  try {
+    shareState.share = await api('PUT', '/api/shares', { token: shareState.share.token, edit: want });
+    renderShare();
+    toast(want ? 'People with the link can now edit' : 'The link is read-only again');
+  } catch (err) { e.target.checked = !want; toast(err.message); }
+};
 $('#btn-share-create').onclick = async () => {
   try {
     shareState.share = await api('POST', '/api/shares', { path: shareState.path });
@@ -1534,7 +1861,7 @@ async function loadShares() {
   for (const sh of r.shares) {
     const li = document.createElement('li');
     const label = sh.kind === 'folder' ? `📁 ${sh.path}` : basename(sh.path) + (dirname(sh.path) ? ` (${dirname(sh.path)})` : '');
-    li.innerHTML = `<span class="who"><b>${esc(label)}</b><span class="shares-list-url">${esc(sh.url)}</span></span>` +
+    li.innerHTML = `<span class="who"><b>${esc(label)}</b>${sh.edit ? '<span class="badge">can edit</span>' : ''}<span class="shares-list-url">${esc(sh.url)}</span></span>` +
       `<button type="button" class="btn" data-act="copy">Copy</button><button type="button" class="btn danger" data-act="stop">Stop</button>`;
     li.querySelector('[data-act="copy"]').onclick = async () => { try { await navigator.clipboard.writeText(sh.url); toast('Link copied'); } catch { toast(sh.url); } };
     li.querySelector('[data-act="stop"]').onclick = async () => {
@@ -1693,7 +2020,7 @@ function noticeDeletions(st) {
   }
   if (gone) {
     parts.push(`${gone} synced task${gone === 1 ? ' was' : 's were'} deleted`);
-    actions.push({ label: added ? 'Review deleted' : 'Review', run: () => openDeleted() });
+    actions.push({ label: added ? 'Review deleted' : 'Review', run: () => openSettings('deleted') });
   }
   toast(parts.join(' · '), actions);
 }
@@ -1711,18 +2038,26 @@ function openDeleted({ path = null } = {}) {
   if (!delDlg.open) delDlg.showModal();
 }
 
-async function loadDeleted() {
-  const ul = $('#deleted-list');
+/** The Deleted tasks list, in its dialog ('dlg', which can be one note's) or in Settings ('set'). */
+const DEL_VIEWS = {
+  dlg: { ul: '#deleted-list', empty: '#deleted-empty', btn: '#btn-empty-deleted' },
+  set: { ul: '#set-deleted-list', empty: '#set-deleted-empty', btn: '#btn-set-empty-deleted' },
+};
+async function loadDeleted(view = 'dlg') {
+  const v = DEL_VIEWS[view];
+  const ul = $(v.ul);
   let list;
   try { list = await api('GET', '/api/deleted'); } catch (e) { ul.innerHTML = `<li class="note err">${esc(e.message)}</li>`; return; }
-  const scope = S.deletedScope;
+  const scope = view === 'dlg' ? S.deletedScope : null;
   if (scope) list = list.filter((d) => d.path === scope);
-  const scopeEl = $('#deleted-scope');
-  scopeEl.hidden = !scope;
-  if (scope) scopeEl.querySelector('b').textContent = basename(scope);
-  $('#deleted-empty').textContent = scope ? 'Nothing deleted from this note recently.' : 'Nothing deleted recently.';
-  $('#deleted-empty').hidden = list.length > 0;
-  $('#btn-empty-deleted').hidden = !list.length || !!scope;
+  if (view === 'dlg') {
+    const scopeEl = $('#deleted-scope');
+    scopeEl.hidden = !scope;
+    if (scope) scopeEl.querySelector('b').textContent = basename(scope);
+  }
+  $(v.empty).textContent = scope ? 'Nothing deleted from this note recently.' : 'Nothing deleted recently.';
+  $(v.empty).hidden = list.length > 0;
+  $(v.btn).hidden = !list.length || !!scope;
   ul.hidden = !list.length;
   ul.innerHTML = '';
   for (const d of list) {
@@ -1744,22 +2079,65 @@ async function loadDeleted() {
         const r = await api('POST', '/api/deleted/restore', { id: d.id });
         const into = r.section && r.section.toLowerCase() !== basename(r.path).toLowerCase() ? ` › ${r.section}` : '';
         toast(`Restored “${d.title}” to ${basename(r.path)}${into}`, { label: 'Open', run: () => { delDlg.close(); if (setDlg.open) setDlg.close(); open(r.path); } });
-        loadDeleted();
+        loadDeleted(view);
+        if (r.path === S.path) reloadIfClean();
         if (syncConfigured()) scheduleSync(1500);
       } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
     };
     li.querySelector('[data-act="forget"]').onclick = async () => {
       if (!confirm(`Delete “${d.title}” forever? It can't be restored after this.`)) return;
-      try { await api('DELETE', `/api/deleted?id=${d.id}`); loadDeleted(); } catch (err) { toast(err.message); }
+      try { await api('DELETE', `/api/deleted?id=${d.id}`); loadDeleted(view); } catch (err) { toast(err.message); }
     };
     ul.append(li);
   }
 }
 $('#btn-deleted-all').onclick = () => { S.deletedScope = null; loadDeleted(); };
-$('#nav-deleted').onclick = () => openDeleted();
-$('#btn-empty-deleted').onclick = async () => {
-  if (!confirm("Delete everything in Deleted tasks forever? None of it can be restored after this.")) return;
-  try { await api('DELETE', '/api/deleted?id=all'); loadDeleted(); } catch (e) { toast(e.message); }
+for (const [view, v] of Object.entries(DEL_VIEWS)) {
+  $(v.btn).onclick = async () => {
+    if (!confirm("Delete everything in Deleted tasks forever? None of it can be restored after this.")) return;
+    try { await api('DELETE', '/api/deleted?id=all'); loadDeleted(view); } catch (e) { toast(e.message); }
+  };
+}
+
+// ---------------------------------------------------------------- trash (Settings → Trash)
+const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+async function loadTrash() {
+  const ul = $('#trash-list');
+  let list;
+  try { list = await api('GET', '/api/trash'); } catch (e) { ul.innerHTML = `<li class="note err">${esc(e.message)}</li>`; return; }
+  $('#trash-empty').hidden = list.length > 0;
+  $('#btn-trash-empty').hidden = !list.length;
+  ul.hidden = !list.length;
+  ul.innerHTML = '';
+  for (const t of list) {
+    const li = document.createElement('li');
+    const name = t.folder ? t.path.split('/').pop() : basename(t.path);
+    const where = dirname(t.path);
+    li.innerHTML = `<span class="what"><b>${t.folder ? '📁 ' : ''}${esc(name)}</b>` +
+      `<span class="meta">${where ? `from <span class="where">${esc(where)}</span> · ` : ''}deleted ${esc(relTime(t.deletedAt))} · ` +
+      `${t.folder ? `${t.notes} note${t.notes === 1 ? '' : 's'}, ` : ''}${fmtSize(t.size)}</span></span>` +
+      `<span class="acts"><button type="button" class="btn" data-act="restore">Restore</button>` +
+      `<button type="button" class="icon-btn" data-act="forget" aria-label="Delete ${esc(name)} forever" title="Delete forever">` +
+      `<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></span>`;
+    li.querySelector('[data-act="restore"]').onclick = async () => {
+      try {
+        const r = await api('POST', '/api/trash/restore', { name: t.name });
+        await loadTree();
+        loadTrash();
+        toast(`Restored ${t.folder ? 'folder' : ''} “${name}”${r.path !== t.path ? ` as ${r.path}` : ''}`,
+          t.folder ? undefined : { label: 'Open', run: () => { setDlg.close(); open(r.path); } });
+      } catch (e) { toast(e.message); }
+    };
+    li.querySelector('[data-act="forget"]').onclick = async () => {
+      if (!confirm(`Delete “${name}” forever? It can't be restored after this.`)) return;
+      try { await api('DELETE', `/api/trash?name=${enc(t.name)}`); loadTrash(); } catch (e) { toast(e.message); }
+    };
+    ul.append(li);
+  }
+}
+$('#btn-trash-empty').onclick = async () => {
+  if (!confirm('Delete everything in the trash forever? None of it can be restored after this.')) return;
+  try { await api('DELETE', '/api/trash?name=all'); loadTrash(); } catch (e) { toast(e.message); }
 };
 
 // ---------------------------------------------------------------- your account & users (multi-user mode)
@@ -2107,6 +2485,7 @@ async function boot() {
   }
   flushPending();
   S.booted = true;
+  checkForUpdate();
   if (syncConfigured()) setTimeout(() => runSync(), 1500);
 }
 boot();

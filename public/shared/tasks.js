@@ -163,8 +163,11 @@ export function sectionName(headingText) {
 
 /** Whether two headings are "the same" for putting tasks back: level, case, spacing and **formatting** don't matter. */
 export function sameSection(a, b) {
-  const norm = (x) => String(x ?? '').replace(/[*_`~]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-  return norm(a) === norm(b);
+  // Also ignores emoji, punctuation and a trailing colon, so "## 🛒 Groceries:" is "### groceries".
+  const norm = (x) => String(x ?? '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`~]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  const x = norm(a), y = norm(b);
+  return x || y ? x === y : String(a ?? '').trim() === String(b ?? '').trim(); // emoji-only headings: as written
 }
 
 /**
@@ -298,34 +301,43 @@ export function newBlockId() {
 }
 
 export const COMPLETE_HEADING = 'Complete';
+export const CANCELLED_HEADING = 'Cancelled';
+const isFinishedHeading = (name) => sameSection(name, COMPLETE_HEADING) || sameSection(name, CANCELLED_HEADING);
 
 /**
  * Keep finished checklist items out of the way: a checked item (with its indented sub-items) moves to
- * the end of a "Complete" subheading at the end of its section, which is added if needed; an item
- * unchecked there moves back up, just above that heading, and an emptied "Complete" heading goes away.
- * Only top-level items move (not sub-items of another item). Returns the new text, or null if nothing moved.
+ * the end of a "Complete" subheading at the end of its section, and a cancelled one ([-]) to a
+ * "Cancelled" subheading after it; either heading is added if needed. Switching between done and
+ * cancelled moves the item across. An item reopened there moves back up, just above those headings,
+ * and an emptied heading goes away. Only top-level items move (not sub-items of another item).
+ * Returns the new text, or null if nothing moved.
  */
 export function fileCompleted(text, lineNo) {
-  const lines = text.split('\n');
+  let lines = text.split('\n');
   const m = lines[lineNo]?.match(/^((?:[-*+]|\d+[.)])\s+)\[([ xX/-])\]/);
   if (!m) return null;
   const done = STATE[m[2]].done;
+  const want = !done ? null : m[2] === '-' ? CANCELLED_HEADING : COMPLETE_HEADING;
   // Headings outside code blocks: [{ i, level, name }]
-  const heads = [];
-  let fence = null;
-  for (let i = 0; i < lines.length; i++) {
-    const f = lines[i].match(FENCE);
-    if (fence) {
-      if (i === lineNo) return null; // a checkbox in a code block isn't an item
-      if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
-      continue;
+  const headings = (ls) => {
+    const out = [];
+    let fence = null;
+    for (let i = 0; i < ls.length; i++) {
+      const f = ls[i].match(FENCE);
+      if (fence) {
+        if (i === lineNo && ls === lines) return null; // a checkbox in a code block isn't an item
+        if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+        continue;
+      }
+      if (f) { fence = f[1]; continue; }
+      const h = ls[i].match(HEADING);
+      if (h) out.push({ i, level: h[1].length, name: sectionName(h[2]) });
     }
-    if (f) { fence = f[1]; continue; }
-    const h = lines[i].match(HEADING);
-    if (h) heads.push({ i, level: h[1].length, name: sectionName(h[2]) });
-  }
-  const isComplete = (h) => h.name.toLowerCase() === COMPLETE_HEADING.toLowerCase();
-  const end = (h) => (heads.find((x) => x.i > h.i && x.level <= h.level) || { i: lines.length }).i;
+    return out;
+  };
+  let heads = headings(lines);
+  if (!heads) return null;
+  const end = (h, hs = heads, n = lines.length) => (hs.find((x) => x.i > h.i && x.level <= h.level) || { i: n }).i;
   // The item and its sub-items (more indented lines; blank lines only if more sub-items follow).
   let last = lineNo;
   for (let i = lineNo + 1; i < lines.length; i++) {
@@ -334,41 +346,61 @@ export function fileCompleted(text, lineNo) {
   }
   const block = lines.slice(lineNo, last + 1);
   const own = [...heads].reverse().find((h) => h.i < lineNo) || null;
-  // Back to the end of a section's own content, before trailing blank lines.
-  const trimBack = (at, floor) => { while (at > floor + 1 && !lines[at - 1].trim()) at--; return at; };
+  if (want && own && sameSection(own.name, want)) return null; // already filed
+  if (!want && !(own && isFinishedHeading(own.name))) return null; // open, and not filed: stays put
 
-  if (done) {
-    if (own && isComplete(own)) return null;
-    const lvl = own ? own.level : 1;
-    const secEnd = own ? end(own) : lines.length;
-    const target = heads.find((h) => h.i > (own ? own.i : -1) && h.i < secEnd && h.level === Math.min(lvl + 1, 6) && isComplete(h));
-    let out;
-    if (target) {
-      const at = trimBack(end(target), target.i);
-      out = [...lines.slice(0, at), ...block, ...lines.slice(at)];
-    } else {
-      const at = trimBack(secEnd, own ? own.i : -1);
-      const heading = `${'#'.repeat(Math.min(lvl + 1, 6))} ${COMPLETE_HEADING}`;
-      const gap = at > 0 && lines[at - 1].trim() ? [''] : [];
-      const after = at < lines.length && lines[at].trim() ? [''] : [];
-      out = [...lines.slice(0, at), ...gap, heading, ...block, ...after, ...lines.slice(at)];
+  // Take the block out, dropping its old "Complete"/"Cancelled" heading if that leaves it empty.
+  let out = [...lines];
+  out.splice(lineNo, block.length);
+  let parentAt = null; // where a reopened item goes: above the section's finished headings
+  if (own && isFinishedHeading(own.name)) {
+    const sEnd = end(own) - block.length;
+    const left = out.slice(own.i + 1, sEnd).some((l) => l.trim());
+    // The finished headings run: this one and any sibling finished headings just before it.
+    let first = own;
+    for (let k = heads.indexOf(own) - 1; k >= 0; k--) {
+      const h = heads[k];
+      if (h.level < own.level) break;
+      if (h.level === own.level) { if (isFinishedHeading(h.name)) first = h; else break; }
     }
-    // Take the block out of its old place (it was before the insertion point).
-    out.splice(lineNo, block.length);
+    let at = first.i;
+    while (at > 0 && !out[at - 1].trim()) at--;
+    if (!left) {
+      let from = own.i;
+      while (from > 0 && !out[from - 1].trim()) from--;
+      out.splice(from, own.i + 1 - from);
+      if (first === own) at = from;
+    }
+    parentAt = at;
+  }
+  if (!want) {
+    out.splice(parentAt, 0, ...block);
     return out.join('\n');
   }
 
-  if (!own || !isComplete(own)) return null;
-  // Unchecked under "Complete": back up, just above that heading (dropped if nothing's left under it).
-  const out = [...lines];
-  out.splice(lineNo, block.length);
-  const sEnd = end(own) - block.length;
-  const left = out.slice(own.i + 1, sEnd).some((l) => l.trim());
-  let at = own.i;
-  while (at > 0 && !out[at - 1].trim()) at--;
-  if (!left) out.splice(at, own.i + 1 - at);
-  out.splice(at, 0, ...block);
-  return out.join('\n');
+  // File it under the right heading at the end of its (parent) section.
+  lines = out;
+  heads = headings(lines) || [];
+  const parent = own && isFinishedHeading(own.name)
+    ? [...heads].reverse().find((h) => h.i < (parentAt ?? 0) && h.level < own.level) || null
+    : own && [...heads].reverse().find((h) => h.i < lineNo) || null;
+  const lvl = parent ? parent.level : 1;
+  const sub = Math.min(lvl + 1, 6);
+  const secEnd = parent ? end(parent) : lines.length;
+  const inSec = (h) => h.i > (parent ? parent.i : -1) && h.i < secEnd && h.level === sub;
+  const trimBack = (at, floor) => { while (at > floor + 1 && !lines[at - 1].trim()) at--; return at; };
+  const target = heads.find((h) => inSec(h) && sameSection(h.name, want));
+  if (target) {
+    const at = trimBack(end(target), target.i);
+    return [...lines.slice(0, at), ...block, ...lines.slice(at)].join('\n');
+  }
+  // A new "Complete" goes before an existing "Cancelled"; "Cancelled" goes at the very end.
+  const cancelled = want === COMPLETE_HEADING && heads.find((h) => inSec(h) && sameSection(h.name, CANCELLED_HEADING));
+  const at = cancelled ? trimBack(cancelled.i, parent ? parent.i : -1) : trimBack(secEnd, parent ? parent.i : -1);
+  const heading = `${'#'.repeat(sub)} ${want}`;
+  const gap = at > 0 && lines[at - 1].trim() ? [''] : [];
+  const after = at < lines.length && lines[at].trim() ? [''] : [];
+  return [...lines.slice(0, at), ...gap, heading, ...block, ...after, ...lines.slice(at)].join('\n');
 }
 
 /**
@@ -387,7 +419,9 @@ export function appendLines(lines, add, { keep = 0 } = {}) {
     const h = out[i].match(HEADING);
     if (h) heads.push({ i, level: h[1].length, name: sectionName(h[2]) });
   }
-  const tail = heads.find((h, k) => sameSection(h.name, COMPLETE_HEADING) && !heads.slice(k + 1).some((x) => x.level <= h.level));
+  // "Complete" (and/or "Cancelled") headings that end the note.
+  const tail = heads.find((h, k) => isFinishedHeading(h.name) &&
+    heads.slice(k + 1).every((x) => x.level > h.level || (x.level === h.level && isFinishedHeading(x.name))));
   if (!tail) {
     while (out.length > keep && out.at(-1) === '') out.pop();
     return [...out, ...add];

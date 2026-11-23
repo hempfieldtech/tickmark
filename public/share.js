@@ -1,5 +1,7 @@
-// Read-only view of a public link (/s/<token>, or /s/<token>/<note in the shared folder>).
+// A public link (/s/<token>, or /s/<token>/<note in the shared folder>): read-only, or, when the owner
+// allows it, editable (checkboxes in the page, and Edit for the note's markdown).
 import { marked } from './vendor/marked.esm.js';
+import { checkboxLines, toggleLine } from './shared/tasks.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const safeUrl = (u) => !/^\s*(javascript|vbscript|data):/i.test(u || '');
@@ -21,7 +23,7 @@ const hrefFor = (file) => `${base}/${file.split('/').map(encodeURIComponent).joi
 marked.use({
   gfm: true,
   renderer: {
-    checkbox({ checked }) { return `<input type="checkbox" disabled${checked ? ' checked' : ''}>`; },
+    checkbox({ checked }) { return `<input type="checkbox" class="pub-cb"${checked ? ' checked' : ''}>`; },
     html({ text }) { return esc(text); }, // raw HTML shows as text, never runs
     link({ href, title: t, tokens }) {
       const text = this.parser.parseInline(tokens);
@@ -43,6 +45,8 @@ marked.use({
         if (m) return { type: 'wikilink', raw: m[0], target: m[1].trim(), label: (m[2] || m[1]).trim() };
       },
       renderer(t) {
+        // Embedded notes aren't part of a public page: say so rather than leave a gap.
+        if (t.raw.startsWith('!')) return `<span class="embed-note" title="Embedded notes aren't shown on public pages">Embedded note “${esc(t.label)}” isn't shown here.</span>`;
         const f = resolve(t.target);
         return f ? `<a href="${esc(hrefFor(f))}" class="wikilink" data-file="${esc(f)}">${esc(t.label)}</a>`
           : `<span class="wikilink missing" title="Not part of this share">${esc(t.label)}</span>`;
@@ -66,13 +70,114 @@ marked.use({
   ],
 });
 
+// ---- the note on show, and editing it (when the link allows that)
+const doc = { content: '', base: '', name: '', sub: '', edit: false, editing: false, saving: null, again: false };
+
 function render(content, name) {
   const body = content.replace(/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, '');
   // Show the note's name as its title unless it starts with its own heading.
   const head = /^\s*#\s/.test(body) ? '' : `<h1 class="share-title">${esc(name)}</h1>`;
   $('#doc').innerHTML = head + (body.trim() ? marked.parse(body) : '<p class="share-empty">This note is empty.</p>');
-  $('#doc').querySelectorAll('li').forEach((li) => { if (li.querySelector(':scope > input[checked], :scope > p > input[checked]')) li.classList.add('done-item'); });
+  // "[/] …" (in progress) and "[-] …" (cancelled) are checkboxes too, so they line up with the source lines.
+  $('#doc').querySelectorAll('li').forEach((li) => {
+    const host = li.firstChild?.nodeName === 'P' ? li.firstChild : li;
+    const t = host.firstChild;
+    const m = t?.nodeType === 3 && /^\[([/-])\]\s/.exec(t.textContent);
+    if (!m) return;
+    t.textContent = t.textContent.slice(m[0].length);
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.className = 'pub-cb';
+    if (m[1] === '-') { cb.checked = true; li.classList.add('cancelled-item'); } else cb.indeterminate = true;
+    host.insertBefore(cb, host.firstChild);
+  });
+  const lines = checkboxLines(content);
+  $('#doc').querySelectorAll('input.pub-cb').forEach((cb, i) => {
+    cb.dataset.line = lines[i] ?? '';
+    cb.disabled = !doc.edit || lines[i] == null;
+    if (cb.checked) cb.closest('li')?.classList.add('done-item');
+  });
+  $('#doc').classList.toggle('editable', doc.edit);
 }
+
+function showNote(content, name, sub) {
+  const fresh = sub !== doc.sub || name !== doc.name;
+  Object.assign(doc, { name, sub });
+  if (doc.editing && !fresh) {
+    // Someone else changed it while this page edits: take their version if nothing is unsaved here.
+    const ta = $('#editor-pub');
+    if (ta.value === doc.base && content !== doc.base) {
+      const a = ta.selectionStart, b = ta.selectionEnd;
+      ta.value = content;
+      ta.setSelectionRange(Math.min(a, content.length), Math.min(b, content.length));
+    }
+    if (ta.value === doc.base) doc.base = doc.content = content;
+    return;
+  }
+  doc.content = doc.base = content;
+  if (fresh) setEditing(false);
+  render(content, name);
+}
+
+function setEditing(on) {
+  doc.editing = on && doc.edit;
+  $('#btn-edit').hidden = !doc.edit;
+  $('#btn-edit').textContent = doc.editing ? 'Done' : 'Edit';
+  $('#btn-edit').setAttribute('aria-pressed', String(doc.editing));
+  $('#editor-pub').hidden = !doc.editing;
+  $('#doc').hidden = doc.editing;
+  if (doc.editing) { $('#editor-pub').value = doc.content; $('#editor-pub').focus(); }
+  else if (doc.edit) render(doc.content, doc.name);
+}
+
+async function savePub() {
+  if (doc.saving) { doc.again = true; return; }
+  const content = doc.editing ? $('#editor-pub').value : doc.content;
+  if (content === doc.base) return status('');
+  status('Saving…');
+  doc.saving = (async () => {
+    try {
+      const r = await fetch(`/api/public/${encodeURIComponent(token)}${doc.sub ? `?path=${encodeURIComponent(doc.sub)}` : ''}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, baseContent: doc.base }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || r.statusText);
+      doc.base = data.content;
+      if (!doc.editing) { doc.content = data.content; render(doc.content, doc.name); }
+      else if ($('#editor-pub').value === content && data.merged) { $('#editor-pub').value = data.content; }
+      doc.content = doc.editing ? $('#editor-pub').value : doc.content;
+      status(data.conflicts ? 'Saved, but some edits clashed: look for the conflict markers' : 'Saved');
+    } catch (e) { status(`Couldn't save: ${e.message}`, true); }
+    finally { doc.saving = null; if (doc.again) { doc.again = false; savePub(); } }
+  })();
+}
+const status = (msg, err = false) => { const el = $('#pub-state'); el.textContent = msg; el.classList.toggle('err', err); };
+let saveTimer = 0;
+document.addEventListener('input', (e) => {
+  if (e.target.id !== 'editor-pub') return;
+  status('Editing…');
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(savePub, 1200);
+});
+document.addEventListener('focusout', (e) => { if (e.target.id === 'editor-pub') { clearTimeout(saveTimer); savePub(); } });
+addEventListener('pagehide', () => {
+  if (!doc.edit) return;
+  const content = doc.editing ? $('#editor-pub').value : doc.content;
+  if (content !== doc.base) fetch(`/api/public/${encodeURIComponent(token)}${doc.sub ? `?path=${encodeURIComponent(doc.sub)}` : ''}`,
+    { method: 'PUT', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, baseContent: doc.base }) });
+});
+$('#doc').addEventListener('click', (e) => {
+  const cb = e.target.closest('input.pub-cb');
+  if (!cb) return;
+  e.preventDefault();
+  if (!doc.edit || cb.dataset.line === '') return;
+  doc.content = toggleLine(doc.content, Number(cb.dataset.line));
+  render(doc.content, doc.name);
+  savePub();
+});
+$('#btn-edit').onclick = async () => {
+  if (doc.editing) { clearTimeout(saveTimer); await savePub(); await doc.saving; doc.content = $('#editor-pub').value; }
+  setEditing(!doc.editing);
+};
 
 function renderFiles(active) {
   const nav = $('#files');
@@ -110,8 +215,10 @@ async function load(push = false, quiet = false) {
   const b = data.brand || {};
   document.querySelectorAll('.brand-name').forEach((x) => (x.textContent = b.name || 'Tickmark'));
   if (b.logo) document.querySelector('.brand img').src = b.logo;
+  doc.edit = !!data.edit;
+  $('#btn-edit').hidden = !doc.edit;
   if (data.kind === 'note') {
-    render(data.content, data.name);
+    showNote(data.content, data.name, '');
     document.title = `${data.name} · ${b.name || 'Tickmark'}`;
     watch('');
     return;
@@ -121,7 +228,7 @@ async function load(push = false, quiet = false) {
   if (!data.path && files.length) { history.replaceState(null, '', hrefFor(files[0])); return load(); }
   renderFiles(data.path);
   $('#crumb').textContent = data.name;
-  if (data.path) { render(data.content, title(data.path)); watch(data.path); }
+  if (data.path) { showNote(data.content, title(data.path), data.path); watch(data.path); }
   else $('#doc').innerHTML = '<p class="share-empty">This folder has no notes yet.</p>';
   document.title = `${data.path ? title(data.path) + ' · ' : ''}${data.name} · ${b.name || 'Tickmark'}`;
   if (push) scrollTo(0, 0);
@@ -132,6 +239,7 @@ document.addEventListener('click', (e) => {
   const a = e.target.closest('a[data-file]');
   if (!a || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
   e.preventDefault();
+  if (doc.editing) { clearTimeout(saveTimer); savePub(); }
   history.pushState(null, '', a.getAttribute('href'));
   load(true);
 });

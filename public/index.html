@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tickmark</title>
   <meta name="theme-color" content="#f7f6f3">
+  <meta name="tickmark-build" content="dev">
   <script src="/theme.js"></script>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
@@ -70,6 +71,23 @@
       </section>
       <footer id="word-count" aria-live="off" hidden></footer>
     </main>
+    <aside id="props" class="props" hidden aria-labelledby="props-title">
+      <header class="set-head">
+        <h3 id="props-title">Properties</h3>
+        <button type="button" class="icon-btn" id="btn-props-close" aria-label="Close" title="Close">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </header>
+      <div class="props-body">
+        <p class="note">The note's frontmatter. Nothing changes until you press Save. Lists are comma-separated.</p>
+        <div id="props-rows"></div>
+        <div><button type="button" id="btn-props-add" class="btn">+ Add property</button></div>
+      </div>
+      <footer class="props-foot">
+        <span class="note" id="props-state"></span>
+        <button type="button" id="btn-props-cancel" class="btn">Cancel</button>
+        <button type="button" id="btn-props-save" class="btn primary">Save</button>
+      </footer>
+    </aside>
   </div>
 
   <dialog id="dlg-settings" class="dlg settings" aria-labelledby="set-title">
@@ -78,10 +96,12 @@
         <h2>Settings</h2>
         <button type="button" data-sec="appearance">Appearance</button>
         <button type="button" data-sec="caldav">CalDAV accounts</button>
-        <button type="button" id="nav-deleted" title="Synced tasks deleted from any note">Deleted tasks…</button>
+        <button type="button" data-sec="deleted">Deleted tasks</button>
         <button type="button" data-sec="help">Help (README)</button>
         <button type="button" data-sec="shares">Public links</button>
         <button type="button" data-sec="sso">Single sign-on</button>
+        <button type="button" data-sec="templates">Templates</button>
+        <button type="button" data-sec="trash">Trash</button>
         <button type="button" data-sec="users">Users</button>
         <button type="button" data-sec="account">Your account</button>
       </nav>
@@ -107,7 +127,7 @@
               <label>Sync while open, every (min) <input name="clientSyncMinutes" type="number" min="0" step="1"></label>
               <label>Server background sync (min, 0 = off) <input name="serverSyncMinutes" type="number" min="0" step="1"></label>
             </div>
-            <label class="check"><input name="moveCompleted" type="checkbox"> Move checked items under a “Complete” heading at the end of their section (and back out when unchecked)</label>
+            <label class="check"><input name="moveCompleted" type="checkbox"> Move checked items under a “Complete” heading, and cancelled ones under “Cancelled”, at the end of their section (and back out when reopened)</label>
           </section>
           <footer class="set-foot"><button class="btn primary">Save</button></footer>
         </form>
@@ -152,13 +172,44 @@
         </section>
 
 
+        <section data-sec="deleted" class="set-body">
+          <p class="note">Synced tasks that were deleted, in your notes or in a task app, are kept here for 30 days.
+            Restoring one puts the line back in its note (or your inbox, if the note is gone) and the task back on your CalDAV server.</p>
+          <ul id="set-deleted-list" class="users deleted"></ul>
+          <p class="note" id="set-deleted-empty" hidden>Nothing deleted recently.</p>
+          <div><button type="button" id="btn-set-empty-deleted" class="btn danger" hidden>Empty Deleted tasks…</button></div>
+        </section>
+
+        <section data-sec="templates" class="set-body">
+          <p class="note">Templates are notes kept in the vault's <code>Templates</code> folder, which the sidebar doesn't show. Apply one from a note's
+            <b>⋯</b> menu → <b>Apply template</b>. <code>{{date}}</code>, <code>{{time}}</code>, <code>{{datetime}}</code> and <code>{{title}}</code> are filled in when it's applied,
+            and checklist items in a template never sync.</p>
+          <ul id="tpl-list" class="users"></ul>
+          <p class="note" id="tpl-empty" hidden>No templates yet.</p>
+          <div><button type="button" id="btn-tpl-new" class="btn">+ New template</button></div>
+          <div class="card tpl-edit" id="tpl-edit" hidden>
+            <label>Name <input id="tpl-name" autocomplete="off" spellcheck="false" placeholder="Meeting notes"></label>
+            <label>Content <textarea id="tpl-content" rows="12" spellcheck="false" placeholder="# {{title}}&#10;&#10;Date: {{date}}&#10;&#10;## Actions&#10;- [ ] "></textarea></label>
+            <div class="row"><button type="button" id="btn-tpl-save" class="btn primary">Save</button>
+              <button type="button" id="btn-tpl-cancel" class="btn">Cancel</button><span class="note" id="tpl-state"></span></div>
+          </div>
+        </section>
+
+        <section data-sec="trash" class="set-body">
+          <p class="note">Notes and folders you moved to the trash. They stay in the vault's <code>.trash</code> folder until you delete them here.
+            Restore puts one back where it was.</p>
+          <ul id="trash-list" class="users deleted"></ul>
+          <p class="note" id="trash-empty" hidden>The trash is empty.</p>
+          <div><button type="button" id="btn-trash-empty" class="btn danger" hidden>Empty trash…</button></div>
+        </section>
+
         <section data-sec="help" class="set-body">
           <article id="readme" class="md readme"><p class="note">Loading…</p></article>
         </section>
 
         <section data-sec="shares" class="set-body">
           <p class="note">Notes and folders you've shared. Anyone with a link can read what it points to (for a folder, every note in it,
-            including ones added later) but can't change anything or see anything else. Share from a note's <b>⋯</b> menu or a folder's menu in the sidebar.</p>
+            including ones added later) but nothing else. Links marked “can edit” also let them change those notes (not create, rename or delete any). Share from a note's <b>⋯</b> menu or a folder's menu in the sidebar.</p>
           <p class="note warn-note" id="shares-blocked" hidden></p>
           <ul id="shares-list" class="users"></ul>
           <p class="note" id="shares-empty" hidden>Nothing is shared.</p>
@@ -341,6 +392,7 @@
       <div id="share-off"><button type="button" id="btn-share-create" class="btn primary">Create public link</button></div>
       <div id="share-on" hidden>
         <div class="row"><input id="share-url" readonly aria-label="Public link"><button type="button" id="btn-share-copy" class="btn">Copy</button></div>
+        <label class="check"><input type="checkbox" id="share-edit"> Anyone with the link can edit</label>
         <div class="row between"><a id="share-open" target="_blank" rel="noopener">Open in a new tab</a>
           <button type="button" id="btn-share-stop" class="btn danger">Stop sharing</button></div>
       </div>

@@ -28,6 +28,15 @@
     .share-empty, .share-error { color: var(--muted); padding: 40px 0; }
     .md .wikilink.missing { color: var(--muted); text-decoration: none; cursor: default; }
     .md input[type=checkbox] { pointer-events: none; }
+    .md.editable input.pub-cb:not(:disabled) { pointer-events: auto; cursor: pointer; }
+    .share-top .grow { flex: 1; }
+    .pub-state { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pub-state.err { color: var(--danger); }
+    #editor-pub { width: 100%; min-height: 70vh; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text);
+      font: 14.5px/1.7 var(--mono); padding: 16px; outline: none; resize: vertical; tab-size: 4; }
+    #editor-pub:focus { border-color: var(--accent); }
+    .md li.cancelled-item { color: var(--muted); text-decoration: line-through; }
+    .md .embed-note { display: block; margin: .6em 0; padding: 6px 12px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); font-size: 14px; font-style: italic; }
     @media (max-width: 760px) {
       .share-wrap { grid-template-columns: minmax(0, 1fr); }
       .share-files { border-right: 0; border-bottom: 1px solid var(--line); min-height: 0; }
@@ -39,10 +48,14 @@
   <header class="share-top">
     <span class="brand"><img src="/icons/icon.svg" alt="" width="22" height="22"> <span class="brand-name">Tickmark</span></span>
     <span class="crumb" id="crumb"></span>
+    <span class="grow"></span>
+    <span class="pub-state" id="pub-state" aria-live="polite"></span>
+    <button type="button" class="btn" id="btn-edit" hidden aria-pressed="false">Edit</button>
   </header>
   <div class="share-wrap single" id="wrap">
     <nav class="share-files" id="files" hidden aria-label="Notes in this folder"></nav>
-    <main class="share-main"><article class="md" id="doc"><p class="share-empty">Loading…</p></article></main>
+    <main class="share-main"><article class="md" id="doc"><p class="share-empty">Loading…</p></article>
+      <textarea id="editor-pub" hidden spellcheck="true" aria-label="Note text"></textarea></main>
   </div>
   <script type="module" src="/share.js"></script>
 </body>

@@ -157,6 +157,22 @@ async function readBody(req) {
   try { return JSON.parse(s); } catch { throw new VaultError('Invalid JSON'); }
 }
 
+// A fingerprint of the app's files. Open apps compare it with theirs when you come back to them and
+// reload when it changed, so a phone never keeps running (or caching) an old version.
+function buildId() {
+  const h = crypto.createHash('sha1');
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const abs = path.join(dir, e.name);
+      if (e.isDirectory()) walk(abs);
+      else if (e.isFile()) h.update(path.relative(PUBLIC, abs)).update(fs.readFileSync(abs));
+    }
+  };
+  try { walk(PUBLIC); } catch {}
+  return h.digest('hex').slice(0, 12);
+}
+const BUILD = buildId();
+
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml',
@@ -174,9 +190,17 @@ function serveStatic(req, res, pathname) {
   if (rel === '/index.html' || rel === '/manifest.webmanifest') {
     return fs.readFile(path.join(PUBLIC, rel), 'utf8', (err, src) => {
       if (err) return json(res, 404, { error: 'Not found' });
-      const out = rel === '/index.html' ? branding.html(src) : branding.manifest(src);
+      const out = rel === '/index.html' ? branding.html(src).replace('content="dev"', `content="${BUILD}"`).replace(/(href|src)="\/(style\.css|app\.js|theme\.js)"/g, `$1="/$2?v=${BUILD}"`) : branding.manifest(src);
       res.writeHead(200, { 'Content-Type': MIME[path.extname(rel)], 'Cache-Control': 'no-cache' });
       res.end(out);
+    });
+  }
+  // The service worker's cache is named after the build, so a new version replaces the old cache.
+  if (rel === '/sw.js') {
+    return fs.readFile(path.join(PUBLIC, 'sw.js'), 'utf8', (err, src) => {
+      if (err) return json(res, 404, { error: 'Not found' });
+      res.writeHead(200, { 'Content-Type': MIME['.js'], 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' });
+      res.end(src.replace(/const CACHE = '[^']*'/, `const CACHE = 'tickmark-${BUILD}'`));
     });
   }
   const abs = path.resolve(PUBLIC, '.' + rel);
@@ -186,7 +210,6 @@ function serveStatic(req, res, pathname) {
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(abs)] || 'application/octet-stream',
       'Cache-Control': 'no-cache',
-      ...(rel === '/sw.js' ? { 'Service-Worker-Allowed': '/' } : {}),
     });
     fs.createReadStream(abs).pipe(res);
   });
@@ -370,7 +393,16 @@ const routes = {
     if (st.isFile() && !rel.toLowerCase().endsWith('.md')) throw Object.assign(new Error('Only notes and folders can be shared'), { status: 400 });
     return shareInfo(shares.create(owner(user), rel, st.isDirectory() ? 'folder' : 'note'));
   },
+  'PUT /api/shares': ({ user }, q, body) => {
+    const s = shares.setEdit(owner(user), String(body.token || ''), !!body.edit);
+    if (!s) throw Object.assign(new Error('That link no longer exists'), { status: 404 });
+    return shareInfo(s);
+  },
   'DELETE /api/shares': ({ user }, q) => ({ ok: shares.remove(owner(user), q.get('token')) }),
+  // ---- the vault's .trash folder
+  'GET /api/trash': ({ ws }) => ws.vault.listTrash(),
+  'POST /api/trash/restore': ({ ws, user }, q, body) => ({ path: ws.vault.restoreTrash(String(body.name || '')) }),
+  'DELETE /api/trash': ({ ws }, q) => ({ deleted: ws.vault.deleteTrash(String(q.get('name') || '')) }),
   'POST /api/folder': ({ ws }, q, body) => { ws.vault.mkdir(String(body.path)); return { ok: true }; },
   'GET /api/search': ({ ws }, q) => ws.index.search(q.get('q') || ''),
   'GET /api/backlinks': ({ ws }, q) => ws.index.backlinks(q.get('path') || ''),
@@ -498,15 +530,17 @@ function publicShare(token, sub) {
   const ws = workspaceFor(s.owner ?? undefined);
   const read = (rel) => { try { return ws.vault.read(rel).content; } catch { return gone(); } };
   const name = (rel) => rel.split('/').pop().replace(/\.md$/i, '');
-  if (s.kind === 'note') return { kind: 'note', name: name(s.path), content: read(s.path) };
+  const edit = !!s.edit;
+  if (s.kind === 'note') return { kind: 'note', name: name(s.path), content: read(s.path), edit, rel: s.path, ws };
   const files = ws.vault.list().files.map((f) => f.path).filter((p) => p.startsWith(s.path + '/'))
     .map((p) => p.slice(s.path.length + 1)).sort((a, b) => a.localeCompare(b));
   if (!files.length && !fs.existsSync(ws.vault.resolve(s.path))) gone();
-  const out = { kind: 'folder', name: name(s.path), files, path: null, content: null };
+  const out = { kind: 'folder', name: name(s.path), files, path: null, content: null, edit, ws };
   if (sub) {
     if (!files.includes(sub)) gone();
     out.path = sub;
-    out.content = read(s.path + '/' + sub);
+    out.rel = s.path + '/' + sub;
+    out.content = read(out.rel);
   }
   return out;
 }
@@ -528,6 +562,7 @@ function ssoState(req) {
 const authRoutes = {
   // Branding shows on the sign-in screen too.
   'GET /api/branding': () => branding.public(),
+  'GET /api/version': () => ({ build: BUILD }),
   'GET /api/auth/me': ({ req }) => {
     if (!MULTI) return { mode: 'single', canSetup: true };
     const u = sessionUser(req);
@@ -597,10 +632,19 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && /^\/s\/[\w-]+(\/.*)?$/.test(url.pathname)) return serveShareShell(res);
   const pubEvents = req.method === 'GET' && url.pathname.match(/^\/api\/public\/([\w-]+)\/events$/);
   if (pubEvents) return publicEvents(req, res, pubEvents[1], url.searchParams.get('path'));
-  const pub = req.method === 'GET' && url.pathname.match(/^\/api\/public\/([\w-]+)$/);
+  const pub = (req.method === 'GET' || req.method === 'PUT') && url.pathname.match(/^\/api\/public\/([\w-]+)$/);
   if (pub) {
     try {
-      const data = publicShare(pub[1], url.searchParams.get('path'));
+      const { ws, rel, ...data } = publicShare(pub[1], url.searchParams.get('path'));
+      if (req.method === 'PUT') {
+        // An editable link: save the shared note (merged with changes made meanwhile), nothing else.
+        if (!data.edit || !rel) throw Object.assign(new Error('This link is read-only'), { status: 403 });
+        const body = await readBody(req);
+        const content = String(body.content ?? '');
+        if (content.length > 2 * 1024 * 1024) throw Object.assign(new Error('That note is too large'), { status: 413 });
+        const r = ws.vault.save(rel, content, { baseContent: typeof body.baseContent === 'string' ? body.baseContent : null });
+        return json(res, 200, { merged: r.merged, conflicts: r.conflicts || 0, content: r.merged ? r.content : content }, { 'X-Robots-Tag': 'noindex' });
+      }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' });
       return res.end(JSON.stringify({ ...data, brand: branding.public() }));
     } catch (e) {

@@ -116,13 +116,92 @@ export class Vault {
     this.onWrite(null);
   }
 
-  /** Move to .trash/ inside the vault rather than deleting. */
+  /** Move to .trash/ inside the vault rather than deleting; .trash/.index.json remembers where it was. */
   trash(rel) {
     const abs = this.resolve(rel);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const dest = path.join(this.root, '.trash', `${stamp}-${path.basename(abs)}`);
+    const name = `${stamp}-${path.basename(abs)}`;
+    const dest = path.join(this.trashDir, name);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.renameSync(abs, dest);
+    const idx = this.trashIndex();
+    idx[name] = { path: this.rel(abs), deletedAt: new Date().toISOString() };
+    this.saveTrashIndex(idx);
     this.onWrite(null);
+  }
+
+  get trashDir() { return path.join(this.root, '.trash'); }
+  trashIndex() { try { return JSON.parse(fs.readFileSync(path.join(this.trashDir, '.index.json'), 'utf8')); } catch { return {}; } }
+  saveTrashIndex(idx) {
+    fs.mkdirSync(this.trashDir, { recursive: true });
+    const f = path.join(this.trashDir, '.index.json');
+    fs.writeFileSync(f + '.tmp', JSON.stringify(idx, null, 2));
+    fs.renameSync(f + '.tmp', f);
+  }
+  /** An entry directly in .trash (never a path that leaves it). */
+  trashEntry(name) {
+    if (typeof name !== 'string' || !name || name.startsWith('.') || /[/\\]/.test(name)) throw new VaultError('Invalid trash entry');
+    const abs = path.join(this.trashDir, name);
+    if (!fs.existsSync(abs)) throw new VaultError('That is no longer in the trash', 404);
+    return abs;
+  }
+
+  /** What's in the trash: [{ name, path (where it was), deletedAt, folder, size, notes }], newest first. */
+  listTrash() {
+    let ents = [];
+    try { ents = fs.readdirSync(this.trashDir, { withFileTypes: true }); } catch { return []; }
+    const idx = this.trashIndex();
+    const out = [];
+    for (const e of ents) {
+      if (e.name.startsWith('.')) continue;
+      const abs = path.join(this.trashDir, e.name);
+      const st = fs.statSync(abs);
+      // Older entries (before the index): the original folder isn't known, only the name.
+      const m = e.name.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z-(.+)$/);
+      const known = idx[e.name];
+      let size = 0, notes = 0;
+      const walk = (p) => {
+        for (const x of fs.readdirSync(p, { withFileTypes: true })) {
+          const q = path.join(p, x.name);
+          if (x.isDirectory()) walk(q);
+          else { size += fs.statSync(q).size; if (x.name.toLowerCase().endsWith('.md')) notes++; }
+        }
+      };
+      if (st.isDirectory()) walk(abs); else size = st.size;
+      out.push({
+        name: e.name,
+        path: known?.path || (m ? m[6] : e.name),
+        deletedAt: known?.deletedAt || (m ? `${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z` : new Date(st.mtimeMs).toISOString()),
+        folder: st.isDirectory(), size, notes,
+      });
+    }
+    return out.sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+  }
+
+  /** Put a trash entry back where it was (beside it, with a number, if that name is taken now). */
+  restoreTrash(name) {
+    const abs = this.trashEntry(name);
+    const item = this.listTrash().find((x) => x.name === name);
+    let rel = item.path;
+    const ext = !item.folder && /\.md$/i.test(rel) ? '.md' : '';
+    const stem = ext ? rel.slice(0, -3) : rel;
+    for (let i = 2; fs.existsSync(this.resolve(rel)); i++) rel = `${stem} ${i}${ext}`;
+    const dest = this.resolve(rel);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(abs, dest);
+    const idx = this.trashIndex();
+    delete idx[name];
+    this.saveTrashIndex(idx);
+    this.onWrite(null);
+    return rel;
+  }
+
+  /** Delete trash entries for good: one by name, or all of them. */
+  deleteTrash(name) {
+    const names = name === 'all' ? this.listTrash().map((x) => x.name) : [name];
+    const idx = this.trashIndex();
+    for (const n of names) { fs.rmSync(this.trashEntry(n), { recursive: true, force: true }); delete idx[n]; }
+    this.saveTrashIndex(idx);
+    return names.length;
   }
 }

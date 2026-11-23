@@ -434,7 +434,8 @@ export class SyncEngine {
         // like checking it in the editor does.
         if (this.getConfig().moveCompleted !== false) {
           for (const op of applied) {
-            if (op.type !== 'update' || op.history || !!op.expect.done === !!op.model.done) continue;
+            const cancelled = (x) => x.status === 'cancelled';
+            if (op.type !== 'update' || op.history || (!!op.expect.done === !!op.model.done && cancelled(op.expect) === cancelled(op.model))) continue;
             const at = out.split('\n').findIndex((l) => l.trimEnd().endsWith(' ^' + op.bid));
             if (at >= 0) out = fileCompleted(out, at) ?? out;
           }

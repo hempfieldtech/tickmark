@@ -284,6 +284,26 @@ test('checked items move under a "Complete" heading, and back when unchecked', a
   assert.equal(check('```\n- [ ] code\n```\n', 1), null, 'never inside code blocks');
 });
 
+test('cancelled items go under "Cancelled", after "Complete", and move across', async () => {
+  const { fileCompleted, setTaskState, sameSection } = await import('../public/shared/tasks.js');
+  const set = (text, n, ch) => fileCompleted(setTaskState(text, n, ch), n);
+  let t = '# Work\n- [ ] A\n- [ ] B\n- [ ] C\n';
+  t = set(t, 1, '-');
+  assert.equal(t, '# Work\n- [ ] B\n- [ ] C\n\n## Cancelled\n- [-] A\n');
+  t = fileCompleted(t.replace('- [ ] B', '- [x] B'), 1);
+  assert.equal(t, '# Work\n- [ ] C\n\n## Complete\n- [x] B\n\n## Cancelled\n- [-] A\n', 'a new "Complete" goes before "Cancelled"');
+  t = fileCompleted(t.replace('- [x] B', '- [-] B'), 4);
+  assert.equal(t, '# Work\n- [ ] C\n\n## Cancelled\n- [-] A\n- [-] B\n', 'done → cancelled moves across; the empty "Complete" goes');
+  t = fileCompleted(t.replace('- [-] A', '- [ ] A'), 4);
+  assert.equal(t, '# Work\n- [ ] C\n- [ ] A\n\n## Cancelled\n- [-] B\n', 'reopened: back above the finished headings');
+  t = fileCompleted('# W\n- [ ] C\n\n## Complete\n- [x] D\n\n## Cancelled\n- [ ] E\n- [-] F\n', 7);
+  assert.equal(t, '# W\n- [ ] C\n- [ ] E\n\n## Complete\n- [x] D\n\n## Cancelled\n- [-] F\n', 'reopened under "Cancelled": above "Complete" too');
+  assert.equal(fileCompleted('# W\n\n## Cancelled\n- [-] X\n', 3), null, 'already there');
+  assert.ok(sameSection('🛒 Groceries:', 'groceries'), 'emoji and a colon don\'t matter');
+  assert.ok(sameSection('[Trip](http://x) plans', 'trip plans'), 'link text counts, not the URL');
+  assert.ok(!sameSection('Groceries', 'Chores'));
+});
+
 test('settings keep custom CSS and the move-completed switch', async () => {
   const { Config } = await import('../server/config.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tickmark-cfg-'));
@@ -309,6 +329,8 @@ test('new lines go above a "Complete" section at the end of a note', async () =>
   assert.deepEqual(appendLines(['# Inbox', '- [ ] A', '', ''], ['- [ ] C']), ['# Inbox', '- [ ] A', '- [ ] C']);
   assert.deepEqual(appendLines(['## Complete', '- [x] B', '## Later', '- [ ] D'], ['- [ ] C']),
     ['## Complete', '- [x] B', '## Later', '- [ ] D', '- [ ] C'], 'a Complete section that isn\'t last doesn\'t count');
+  assert.deepEqual(appendLines(['# I', '- [ ] A', '', '## Complete', '- [x] B', '', '## Cancelled', '- [-] X'], ['- [ ] C']),
+    ['# I', '- [ ] A', '- [ ] C', '', '## Complete', '- [x] B', '', '## Cancelled', '- [-] X'], 'above "Complete" and "Cancelled"');
 });
 
 test('open sub-items under an item', async () => {
@@ -333,7 +355,7 @@ test('checkbox states: in progress and cancelled', async () => {
   assert.equal(setTaskState('- [x] Done ✅ 2026-01-01', 0, '-'), '- [-] Done');
   assert.match(setTaskState('- [-] X', 0, 'x'), /^- \[x\] X ✅ /);
   assert.deepEqual(checkboxLines(text), [0, 1, 2, 3]);
-  assert.equal(fileCompleted('# A\n- [-] Gone\n- [ ] Stay', 1), '# A\n- [ ] Stay\n\n## Complete\n- [-] Gone', 'cancelled counts as finished');
+  assert.equal(fileCompleted('# A\n- [-] Gone\n- [ ] Stay', 1), '# A\n- [ ] Stay\n\n## Cancelled\n- [-] Gone', 'cancelled goes under its own heading');
   // CalDAV
   const ics = buildTodo({ uid: 'u', model: { title: 'Draft', done: false, status: 'in-progress', due: null, priority: 0, recur: null } });
   assert.match(ics, /STATUS:IN-PROCESS/);
@@ -348,4 +370,19 @@ test('merge3: edits to neighbouring lines from both sides merge without a confli
   const base = '# Collab\nline one\nline two\n';
   assert.deepEqual(merge3(base, '# Collab\nline ONE\nline two\n', '# Collab\nline one\nline TWO\n'), { text: '# Collab\nline ONE\nline TWO\n', conflicts: 0 });
   assert.equal(merge3(base, '# Collab\nA\nline two\n', '# Collab\nB\nline two\n').conflicts, 1, 'the same line changed two ways still conflicts');
+});
+
+test('frontmatter: properties out and back without losing what it does not understand', async () => {
+  const { parseFrontmatter, writeFrontmatter } = await import('../public/shared/frontmatter.js');
+  const text = '---\ntitle: Trip plans\ntags: [travel, "a, b"]\naliases:\n  - Trip\n  - Holiday\n# a comment\nmeta:\n  nested: 1\n  other: two\n---\n# Body\n';
+  const fm = parseFrontmatter(text);
+  assert.equal(fm.body, '# Body\n');
+  assert.deepEqual(fm.entries.map((e) => [e.key, e.kind]), [['title', 'text'], ['tags', 'inline'], ['aliases', 'list'], [null, 'other'], ['meta', 'raw']]);
+  assert.deepEqual(fm.entries[1].value, ['travel', 'a, b'], 'commas in quotes stay');
+  assert.equal(writeFrontmatter(fm.body, fm.entries), text, 'unchanged properties write back the same');
+  const changed = fm.entries.filter((e) => e.key !== 'meta').map((e) => (e.key === 'aliases' ? { ...e, value: ['Trip', 'Getaway'] } : e));
+  assert.equal(writeFrontmatter(fm.body, changed), '---\ntitle: Trip plans\ntags: [travel, "a, b"]\naliases:\n  - Trip\n  - Getaway\n# a comment\n---\n# Body\n');
+  assert.equal(writeFrontmatter('# Body\n', []), '# Body\n', 'no properties: no frontmatter');
+  assert.equal(writeFrontmatter('x', [{ key: 'due', kind: 'text', value: '2026-12-01' }]), '---\ndue: 2026-12-01\n---\nx');
+  assert.equal(parseFrontmatter('no frontmatter').has, false);
 });
