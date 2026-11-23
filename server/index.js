@@ -15,6 +15,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { VaultError } from './vault.js';
@@ -172,6 +173,8 @@ function buildId() {
   return h.digest('hex').slice(0, 12);
 }
 const BUILD = buildId();
+const PKG = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')); } catch { return { version: '?' }; } })();
+const STARTED_AT = new Date().toISOString();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -352,7 +355,8 @@ const routes = {
     if (!id) throw Object.assign(new Error('Missing id'), { status: 400 });
     const rel = body.path ? String(body.path) : null;
     if (!rel || !collabAllowed(user, rel)) { ws.dropPresence(id); return { allowed: false }; }
-    ws.setPresence({ id, path: rel, line: Number.isInteger(body.line) ? body.line : null, name: user?.name || null, device: deviceName(req.headers['user-agent']) });
+    const int = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
+    ws.setPresence({ id, path: rel, line: int(body.line), col: int(body.col), name: user?.name || null, device: deviceName(req.headers['user-agent']) });
     return { allowed: true };
   },
   'DELETE /api/presence': ({ ws }, q) => { ws.dropPresence(String(q.get('id') || '')); return { ok: true }; },
@@ -375,7 +379,21 @@ const routes = {
     await ws.history.commit();
     return { ok: true, hash: r.hash, content: old };
   },
-  // ---- the README, for Settings → Help
+  // ---- Settings → About: versions and what this server is running on
+  'GET /api/about': async ({ ws, user }) => {
+    const list = ws.vault.list();
+    return {
+      version: PKG.version, build: BUILD, node: process.versions.node,
+      os: `${os.type()} ${os.release()}`, arch: process.arch, docker: fs.existsSync('/.dockerenv'),
+      startedAt: STARTED_AT, uptime: Math.round(process.uptime()),
+      mode: MULTI ? 'multi' : 'single', users: MULTI && user?.admin ? users.list().length : null,
+      sso: oidc.enabled, passwordSignIn: MULTI ? LOCAL_LOGIN : null, publicUrl: !shareBlocker(oidc.publicUrl),
+      history: await ws.history.init(),
+      notes: list.files.length, folders: list.folders.length,
+      accounts: ws.config.get().accounts.filter((a) => a.url && a.calendarUrl).length,
+    };
+  },
+  // ---- the README, for Help
   'GET /api/readme': () => {
     try { return { markdown: fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8') }; } catch { return { markdown: null }; }
   },
@@ -438,6 +456,12 @@ const routes = {
     return { ok: true };
   },
   'GET /api/sync': ({ ws }) => ws.sync.status,
+  // The last runs of one account's sync, newest first: what was sent and received, and any errors.
+  'GET /api/sync/history': ({ ws }, q) => {
+    const id = String(q.get('account') || '');
+    if (!ws.config.get().accounts.some((a) => a.id === id)) throw Object.assign(new Error('No such account'), { status: 404 });
+    return ws.sync.syncHistory(id);
+  },
   'POST /api/sync': async ({ ws }, q, body) => {
     try {
       return { ok: true, result: await ws.sync.run({ force: !!body.force }) };

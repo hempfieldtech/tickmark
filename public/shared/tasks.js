@@ -171,27 +171,28 @@ export function sameSection(a, b) {
 }
 
 /**
- * Insert `line` at the end of the section under the heading named `section` (as in a task's `section`),
- * before any trailing blank lines. Returns the new lines, or null if no such heading exists.
+ * Insert `line` under the heading named `section` (as in a task's `section`, its innermost heading):
+ * at the end of that heading's own content, before its first subheading (so an item that sat right
+ * under a note's "# Title" doesn't land under the last "##" of the note), and before trailing blank
+ * lines and a closing --- divider. Returns the new lines, or null if no such heading exists.
  */
 export function insertInSection(lines, section, line) {
-  let fence = null, start = -1, level = 0;
+  let fence = null, start = -1, end = lines.length;
   for (let i = 0; i < lines.length; i++) {
     const f = lines[i].match(FENCE);
     if (fence) { if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null; continue; }
     if (f) { fence = f[1]; continue; }
     const h = lines[i].match(HEADING);
     if (!h) continue;
-    if (start >= 0 && h[1].length <= level) {
-      let at = i;
-      while (at > start + 1 && lines[at - 1].trim() === '') at--;
-      return [...lines.slice(0, at), line, ...lines.slice(at)];
-    }
-    if (start < 0 && sameSection(sectionName(h[2]), section)) { start = i; level = h[1].length; }
+    if (start >= 0) { end = i; break; }
+    if (sameSection(sectionName(h[2]), section)) start = i;
   }
   if (start < 0) return null;
-  let at = lines.length;
-  while (at > start + 1 && lines[at - 1].trim() === '') at--;
+  let at = end;
+  const skipBlank = () => { while (at > start + 1 && lines[at - 1].trim() === '') at--; };
+  skipBlank();
+  // A divider that closes the section (not one right under the heading) stays below the item.
+  if (at > start + 2 && /^\s*([-*_])(?:\s*\1){2,}\s*$/.test(lines[at - 1]) && lines.slice(start + 1, at - 1).some((l) => l.trim())) { at--; skipBlank(); }
   return [...lines.slice(0, at), line, ...lines.slice(at)];
 }
 
@@ -458,6 +459,23 @@ export function setTaskState(text, lineNo, ch) {
     if (STATE[m[2]].done) { lines[lineNo] = m[1] + ' ' + m[3]; text = lines.join('\n'); } // cancelled → done
     return toggleLine(text, lineNo);
   }
-  lines[lineNo] = m[1] + ch + m[3].replace(DONE_DATE, '');
+  let rest = m[3].replace(DONE_DATE, '');
+  if (ch === '-') rest = dropRecurrence(rest);
+  lines[lineNo] = m[1] + ch + rest;
   return lines.join('\n');
 }
+
+/**
+ * Cancelling a recurring item cancels the whole series: its 🔁 rule goes, so nothing moves it on
+ * to a next date (which would look like completing each occurrence). Keeps the block id.
+ */
+export function dropRecurrence(rest) {
+  const b = rest.match(BLOCK_ID);
+  const head = b ? rest.slice(0, b.index) : rest;
+  const rc = head.match(RECUR);
+  if (!rc || !parseRecurrence(rc[1])) return rest;
+  return head.replace(RECUR, '') + (b ? rest.slice(b.index) : '');
+}
+
+/** A cancelled task has no recurrence (see dropRecurrence). */
+export const endCancelledSeries = (model) => (model.status === 'cancelled' && model.recur ? { ...model, recur: null } : model);

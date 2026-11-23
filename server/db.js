@@ -157,6 +157,10 @@ export class Index {
     for (const { account } of this.db.prepare('SELECT DISTINCT account FROM sync_states').all()) {
       if (!known.has(account)) { this.clearStates(account); this.db.prepare('DELETE FROM meta WHERE key = ?').run('calendar:' + account); }
     }
+    // Sync history of removed accounts (kept in meta as synclog:<id>)
+    for (const { key } of this.db.prepare("SELECT key FROM meta WHERE key LIKE 'synclog:%'").all()) {
+      if (!known.has(key.slice(8))) this.db.prepare('DELETE FROM meta WHERE key = ?').run(key);
+    }
   }
 
   /** Before multiple accounts, sync state had no account column. It all belonged to the first account. */

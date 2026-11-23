@@ -732,3 +732,31 @@ test('public links can let people with the link edit the shared note, and only t
     assert.equal((await anon('PUT', `/api/public/${sh.token}`, { content: 'x' })).status, 403, 'read-only again');
   } finally { await srv.stop(); }
 });
+
+test('About and sync history', async (t) => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault') });
+  const c = client(srv.base);
+  try {
+    await t.test('About lists versions and what is available', async () => {
+      const r = await c.call('GET', '/api/about');
+      assert.equal(r.status, 200);
+      const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+      assert.equal(r.data.version, pkg.version);
+      assert.match(r.data.build, /^[0-9a-f]{12}$/);
+      assert.equal(r.data.mode, 'single');
+      assert.equal(typeof r.data.notes, 'number');
+    });
+    await t.test('sync history is per account and unknown accounts are refused', async () => {
+      assert.equal((await c.call('GET', '/api/sync/history?account=nope')).status, 404);
+      const cfg = await c.call('PUT', '/api/config', { accounts: [{ name: 'Down', url: 'http://127.0.0.1:9/', username: 'u', password: 'p', calendarUrl: 'http://127.0.0.1:9/cal/', itemTags: 'task' }] });
+      const id = cfg.data.accounts[0].id;
+      await c.call('POST', '/api/sync', {});
+      const h = await c.call('GET', `/api/sync/history?account=${id}`);
+      assert.equal(h.status, 200);
+      assert.ok(h.data.length >= 1);
+      assert.equal(h.data[0].ok, false, 'an unreachable server is recorded as a failed sync');
+      assert.ok(h.data[0].error);
+    });
+  } finally { await srv.stop(); }
+});

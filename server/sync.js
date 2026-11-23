@@ -11,7 +11,7 @@
 // Several CalDAV accounts can be configured. Each synced item belongs to exactly one, chosen by
 // accountFor(); sync state is kept per account, so retagging an item moves it between accounts.
 
-import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted, appendLines, openSubtasks } from '../public/shared/tasks.js';
+import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted, appendLines, openSubtasks, endCancelledSeries } from '../public/shared/tasks.js';
 import { buildTodo, parseICS, findTodo, todoModel, occurrenceCompleted } from './ical.js';
 import { CalDAV } from './caldav.js';
 import { fingerprint } from './secrets.js';
@@ -50,7 +50,16 @@ export const isTemplate = (p) => p.toLowerCase().startsWith(TEMPLATES.toLowerCas
 
 /** Heading for restored tasks whose own heading no longer exists. */
 const RESTORED = 'Restored tasks';
-const emptyResult = () => ({ pushed: 0, pulled: 0, created: 0, imported: 0, deletedRemote: 0, deletedLocal: 0, trashed: 0, errors: [], importedNotes: [] });
+const emptyResult = () => ({ pushed: 0, pulled: 0, created: 0, imported: 0, deletedRemote: 0, deletedLocal: 0, trashed: 0, errors: [], importedNotes: [], log: [] });
+/** Sync history: how many runs each account keeps, and how many items one run records. */
+export const HISTORY_RUNS = 30;
+const HISTORY_ITEMS = 200;
+const SHOWN = { title: 'title', done: 'done', status: 'status', due: 'due', priority: 'priority', recur: 'repeats' };
+/** What differs between two task models, for the sync history: [{ field, from, to }]. */
+function changes(from, to) {
+  if (!from) return [];
+  return FIELDS.filter((k) => norm(k, from[k]) !== norm(k, to[k])).map((k) => ({ field: SHOWN[k], from: norm(k, from[k]), to: norm(k, to[k]) }));
+}
 const COUNTS = ['pushed', 'pulled', 'created', 'imported', 'deletedRemote', 'deletedLocal', 'trashed'];
 
 export class SyncEngine {
@@ -112,7 +121,7 @@ export class SyncEngine {
         let changed = false;
         // Bottom-up, because each one inserts a history line below itself.
         for (const t of parseTasks(text, tagOpts).reverse()) {
-          if (!t.synced || !t.done || !t.recur) continue;
+          if (!t.synced || !t.done || !t.recur || t.status === 'cancelled') continue; // cancelled ends the series
           const a = advanceRecurring(t, { today });
           if (!a) continue; // series over: it stays completed
           lines.splice(t.line, 1, a.openLine, a.historyLine);
@@ -146,7 +155,8 @@ export class SyncEngine {
     }
 
     // ---- 2-8 per account. One account failing (offline server, bad password) doesn't stop the others.
-    const total = { ...emptyResult(), accounts: [] };
+    const { log: _, ...blank } = emptyResult();
+    const total = { ...blank, accounts: [] };
     for (const a of accounts) {
       const r = emptyResult();
       const entry = { id: a.id, name: a.name };
@@ -156,8 +166,11 @@ export class SyncEngine {
         entry.error = e.message;
         if (e.needsForce) entry.needsForce = true;
       }
-      Object.assign(entry, r);
+      const { log, ...counts } = r;
+      Object.assign(entry, counts);
       total.accounts.push(entry);
+      this.recordHistory(a.id, { at: new Date().toISOString(), ok: !entry.error, error: entry.error || null, needsForce: !!entry.needsForce,
+        counts: Object.fromEntries(COUNTS.map((k) => [k, r[k]])), errors: r.errors, items: log.slice(0, HISTORY_ITEMS), more: Math.max(0, log.length - HISTORY_ITEMS) });
       for (const k of COUNTS) total[k] += r[k];
       total.importedNotes = [...new Set([...total.importedNotes, ...r.importedNotes])];
       total.errors.push(...r.errors.map((x) => (accounts.length > 1 ? `${a.name}: ${x}` : x)));
@@ -165,6 +178,19 @@ export class SyncEngine {
     this.index.pruneDeleted();
     if (total.errors.length) this.log('[sync] errors:', total.errors);
     return total;
+  }
+
+  /** Keep one run in an account's sync history (newest first, HISTORY_RUNS of them). */
+  recordHistory(accountId, run) {
+    try {
+      const list = this.syncHistory(accountId);
+      list.unshift(run);
+      this.index.setMeta('synclog:' + accountId, JSON.stringify(list.slice(0, HISTORY_RUNS)));
+    } catch (e) { this.log('[sync] could not record history:', e.message); }
+  }
+
+  syncHistory(accountId) {
+    try { return JSON.parse(this.index.getMeta('synclog:' + accountId) || '[]'); } catch { return []; }
   }
 
   /**
@@ -301,6 +327,7 @@ export class SyncEngine {
       const ics = buildTodo({ uid, model: l.model, tickmarkId: bid, description: `From note: ${l.path}`, doneDate: l.task.doneDate });
       const { etag } = await client.put(url, ics, { create: true });
       result.created++;
+      result.log.push({ dir: 'sent', kind: 'created', title: l.model.title, path: l.path });
       return { block_id: bid, uid, href: rel(url), etag, base: l.model, path: l.path, section: l.task.section };
     };
 
@@ -310,7 +337,8 @@ export class SyncEngine {
           stateWrites.push({ set: await createRemote(bid, L) });
         } else if (L && R) {
           const base = S?.base || null;
-          let m = merge(L.model, R.model, base);
+          // A cancelled recurring todo (here or in the other app) ends its series on both sides.
+          let m = endCancelledSeries(merge(L.model, R.model, base));
           // Not done while it has unchecked sub-items in the note: completing it elsewhere is undone.
           if (m.done && !L.model.done && L.openSubtasks) m = { ...m, done: false };
           // Completed elsewhere: a recurring todo moves on to its next date on both sides, and the
@@ -325,7 +353,10 @@ export class SyncEngine {
           if (!modelsEqual(m, R.model) || R.tickmarkId !== bid || moved) {
             const ics = buildTodo({ existing: R.ics, uid: R.uid, model: m, tickmarkId: bid, doneDate: L.task.doneDate, fromNote: moved ? L.path : null });
             etag = (await client.put(R.url, ics, { etag: R.etag })).etag;
-            if (!modelsEqual(m, R.model)) result.pushed++;
+            if (!modelsEqual(m, R.model)) {
+              result.pushed++;
+              result.log.push({ dir: 'sent', kind: 'updated', title: m.title, path: L.path, changes: changes(R.model, m) });
+            }
           }
           const st = { block_id: bid, uid: R.uid, href: rel(R.url), etag, base: m, path: L.path, section: L.task.section };
           if (!modelsEqual(m, L.model) || history) {
@@ -340,6 +371,7 @@ export class SyncEngine {
           if (modelsEqual(R.model, S.base)) {
             await client.delete(R.url, R.etag);
             result.deletedRemote++;
+            result.log.push({ dir: 'sent', kind: 'deleted', title: R.model.title, path: S.path });
             stateWrites.push({ del: bid });
             // Keep the server's copy: restoring puts back exactly this todo, alarms and all.
             keep(bid, { source: 'notes', model: R.model, ics: R.ics, href: rel(R.url), path: S.path, section: S.section });
@@ -407,6 +439,7 @@ export class SyncEngine {
             appends.push(op.line);
             applied.push(op);
             result.imported++;
+            result.log.push({ dir: 'received', kind: 'new', title: op.state.base.title, path });
             if (!result.importedNotes.includes(path)) result.importedNotes.push(path);
             continue;
           }
@@ -417,9 +450,11 @@ export class SyncEngine {
             lines[t.line] = buildTaskLine(t, op.model, { doneDate: op.doneDate || t.doneDate });
             if (op.history) insertAfter.set(t.line, op.history);
             result.pulled++;
+            result.log.push({ dir: 'received', kind: 'updated', title: op.model.title, path, changes: changes(op.expect, op.model) });
           } else if (op.type === 'delete') {
             remove.add(t.line);
             result.deletedLocal++;
+            result.log.push({ dir: 'received', kind: 'deleted', title: op.expect.title, path });
             op.trash.line = lines[t.line];
           }
           applied.push(op);

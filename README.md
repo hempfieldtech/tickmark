@@ -80,7 +80,7 @@ node server/users.js passwd|remove <name>, or list
 node server/users.js sso-off                          # escape hatch: turn off SSO set up in Settings
 ```
 
-After that, admins add and remove people in Settings → **Users**, and everyone can change their own password in Settings → **Your account**. Removing a user leaves their files on disk. Sessions last 30 days; changing a password signs out the user's other devices. Ten wrong passwords from one address lock it out for 15 minutes.
+After that, admins add and remove people in Settings → **Users**, and everyone can change their own password in Settings → **Account** (shown to accounts that have a password; **Sign out** is at the bottom of the Settings list). Removing a user leaves their files on disk. Sessions last 30 days; changing a password signs out the user's other devices. Ten wrong passwords from one address lock it out for 15 minutes.
 
 `--vault /path` on `users.js add` puts a user's notes somewhere other than `<vault>/<name>`, e.g. an existing Obsidian folder. Vault folders must not overlap.
 
@@ -177,28 +177,46 @@ Sync runs on the server, since the server holds the files. The editor saves when
 - **Already done before it ever synced** (e.g. the completed copies recurring tasks leave behind): stays in the note, isn't uploaded.
 - **Created elsewhere → the account's inbox note** (`Inbox.md` by default), tagged so it keeps syncing. Old completed todos are not imported. A todo whose description says `From note: Work/Plan.md` (as Tickmark writes them) goes back to that note instead, or to a new note of that name in the vault's root if it no longer exists.
 - **Deletes propagate** both ways, but only when the other side hasn't changed since the last sync. If it has, the surviving copy is recreated so nothing is lost. Removing the tag from a line counts as deleting it.
-- **Deleted tasks can be restored for 30 days.** The **⋯** menu (top right) → **Deleted tasks in this note** lists the open note's synced tasks that sync deleted (Settings → **Deleted tasks** lists every note's), whether the line was removed from a note or the todo was deleted in a task app, and after any sync that deletes something a notice offers **Review**. Each entry shows the note and the heading it was under, so two tasks with the same name are easy to tell apart. *Restore* puts the line back in its note, under that heading if it still exists (otherwise under a **Restored tasks** heading, in the inbox if the note is gone), and the todo back on the server, the exact copy where Tickmark kept one, so details other apps added survive. A line whose tag you removed, or that moved to another account, isn't counted as deleted and brings no notice. The list lives in the search index, so deleting `index.sqlite` empties it.
+- **Deleted tasks can be restored for 30 days.** The **⋯** menu (top right) → **Deleted tasks…** lists the open note's synced tasks that sync deleted (Settings → **Deleted tasks** lists every note's), whether the line was removed from a note or the todo was deleted in a task app, and after any sync that deletes something a notice offers **Review**. Each entry shows the note and the heading it was under, so two tasks with the same name are easy to tell apart. *Restore* puts the line back in its note, under that heading if it still exists (at the end of the heading's own lines, before its subheadings and any closing `---`) (otherwise under a **Restored tasks** heading, in the inbox if the note is gone), and the todo back on the server, the exact copy where Tickmark kept one, so details other apps added survive. A line whose tag you removed, or that moved to another account, isn't counted as deleted and brings no notice. The list lives in the search index, so deleting `index.sqlite` empties it.
 - **Remote edits are patched, not replaced.** Properties other clients add (alarms, descriptions, timezones, X- props) are kept.
-- **Mass-deletion guard.** If more than half the tasks seem to have disappeared on one side (wrong calendar, server hiccup), sync stops and asks you to confirm with "Sync anyway".
+- **Mass-deletion guard.** If more than half the tasks seem to have disappeared on one side (a server hiccup, or most of a list deleted in a task app), sync stops and asks you to confirm with "Sync anyway". Choosing a different task list in Settings doesn't trigger it: that starts afresh and copies every task to the new list.
+- **Cancelling a recurring task ends the series.** Its `🔁` rule is dropped (here, or when it's cancelled in a task app), so it doesn't move on to a next date like a completed one does.
+- **Sync history.** Each account's **Sync history** button (Settings → CalDAV accounts) shows its last 30 syncs: when, whether it worked, and every task sent or received with what changed (e.g. `done: not done → done`).
 - **Editor vs. sync.** Saves send the version the editor started from. If the file changed on disk meanwhile (sync, another device, another editor), the server does a line-level three-way merge. Real clashes get git-style conflict markers and a banner in the note.
 
 ## Editor
 
 Source / split / preview (Ctrl+E cycles). Preview checkboxes are clickable and edit the source line; checking an item stamps `✅ date` and moves it, with its sub-items, under a **Complete** heading at the end of its section, and a cancelled item goes under a **Cancelled** heading after that (reopening moves it back up; Settings → CalDAV accounts turns this off). That happens for items checked in a task app too. Besides `[ ]` and `[x]`, items can be in progress `[/]` (synced as IN-PROCESS) or cancelled `[-]` (synced as CANCELLED; it counts as finished). A synced item with unchecked sub-items can't be completed until they are. Tasks live in your notes: there is no separate task list view. `[[wikilinks]]` (clicking a missing one creates the note; renaming or moving a note or folder updates links to it), backlinks, embedded notes (`![[Other note]]` shows it inline, `![[Other note#Heading]]` just that section; its checkboxes work and change the other note, and its headings fold), collapsible headings in the preview, `[[` suggestions while typing, #tag search, full-text search, and drag-and-drop in the file tree.
 
-**Live collaboration.** When a note is open in more than one place (another device, another tab, or someone else signed in to the same account), round badges in the top bar show who's there, on which device and which line. Edits then save within about a second instead of waiting for a pause, and theirs merge into yours as they arrive (line by line, so two people changing the same line at once still get conflict markers). It's on in multi-user mode, and in single-user mode for notes with an active public link; public link pages update live as you type, and a 👁 badge counts their viewers. Public links are read-only unless you let them edit (see Public links).
+**Live collaboration.** When a note is open in more than one place (another device, another tab, or someone else signed in to the same account), round badges in the top bar show who's there, on which device and which line, and their cursor shows in the editor as a coloured caret with their name (an arrow at the top or bottom edge when it's out of view). Edits then save within about a second instead of waiting for a pause, and theirs merge into yours as they arrive (line by line, so two people changing the same line at once still get conflict markers). It's on in multi-user mode, and in single-user mode for notes with an active public link; public link pages update live as you type, and a 👁 badge counts their viewers. Public links are read-only unless you let them edit (see Public links).
 
 **Task shortcuts.** Typing `:` and a few letters in the editor offers the task markers: `:calendar:` (or `:due:`) puts in `📅` with today's date selected so you can type over it, `:tomorrow:` and `:nextweek:` other dates, `:recur:` `🔁 every `, `:high:` `:medium:` `:low:` (and `:highest:` `:lowest:`) the priorities, `:done:` `✅` with today. Pick one with ↑/↓ and Enter, or type the closing colon.
+
+**Code blocks.** A fenced block with a language (` ```js `, ` ```python `, ` ```bash `, ` ```json `, ` ```css `, ` ```html `, ` ```sql `, ` ```yaml `, ` ```go `, ` ```rust `, ` ```diff ` and about twenty more) gets syntax colours, the language's name on its top edge and an accent colour for that language. Other languages show their name, uncoloured.
+
+**Search.** The sidebar search looks in note names and text. Opening a result goes to the first place the search appears: selected in the editor and marked in the preview.
+
+**Command palette.** Ctrl+Shift+P (or F1) lists everything Tickmark can do by name: note actions, views, settings sections, themes, sync, Vim and line numbers, and the notes matching what you type. Commands you used last come first.
+
+**Help.** The **?** button (top right) → **Help** shows this README with its sections as a tree on the left (with a filter), and **Keybindings** lists every shortcut, grouped, with a search (Ctrl+/ opens it too).
+
+**Editor settings.** Settings → **Editor** (per device) turns on **Vim mode** (normal, insert, visual and replace modes; motions, operators, text objects, counts, registers including the clipboard, marks, `/` search, `.` repeat and `:w :q :s :%s :sort :{line} :e note` — the bottom bar shows the mode and takes `:` commands; Keybindings has the full list) and **line numbers** (beside the text, matching wrapped lines, plus the note's line count in the bottom bar).
+
+**The bottom bar** shows the note's words and characters, its checklist items by state (to do, in progress, done, cancelled), and **Public link** when the note (or its folder) is shared; click that to manage the link.
 
 **Properties.** The **⋯** menu → **Properties…** opens the note's frontmatter as a form in a panel on the right: change values, add or remove properties, and nothing is written until **Save**. Lists (`tags: [a, b]` or one `- item` per line) are edited comma-separated and keep their style; anything more complicated (nested values) shows as YAML and is kept as written.
 
 **History.** Every note's past versions are kept with git: the **⋯** menu → **History…** lists them, shows what changed between a version and the note now, and can restore it (the current text stays in the history too). Changes are recorded about 30 seconds after you stop editing, including edits made outside Tickmark. The repository lives in the data folder (`history.git`, per user), not in the vault, so a vault that's already a git repo is left alone. It needs `git` on the server; the Docker image includes it.
 
-**Templates.** Notes in a `Templates` folder are templates. Settings → **Templates** lists them and creates, edits, renames and deletes them; the folder itself is hidden from the sidebar, search and the switcher. The **⋯** menu → **Apply template…** opens a search box in the menu and puts the chosen one into the open note (an empty note takes it whole, otherwise it goes in at the cursor), and **Save as template…** saves the open note as one. `{{date}}`, `{{time}}`, `{{datetime}}` and `{{title}}` are filled in when it's applied. Checklist items in templates never sync, so a template can hold `#task` items safely.
+**Templates.** Notes in a `Templates` folder are templates. Settings → **Templates** lists them and creates, edits, renames and deletes them; the folder itself is hidden from the sidebar, search and the switcher. The **⋯** menu → **Apply template…** opens a search box in the menu and puts the chosen one into the open note (an empty note takes it whole, otherwise it goes in at the cursor), and Settings → Templates → **+ From “note”** saves the open note as one. `{{date}}`, `{{time}}`, `{{datetime}}` and `{{title}}` are filled in when it's applied. Checklist items in templates never sync, so a template can hold `#task` items safely.
 
 **Public links.** A note's **⋯** menu, or a folder's menu in the sidebar, → **Share…** makes a read-only link anyone can open without signing in (a folder link shows every note in it, including ones added later, and `[[links]]` between them work). Ticking **Anyone with the link can edit** lets them change what's shared too: checkboxes work on the page, and **Edit** opens the note's markdown, saved as they type and merged with your edits (they can't create, rename or delete notes). Embedded notes aren't shown on public pages; a notice stands in for them. Links follow renames, stop when the note goes to the trash, and are listed under Settings → **Public links**, where you can stop sharing. They're only offered when `TICKMARK_PUBLIC_URL` is a domain name (not an IP address or localhost), and links are built from it. Raw HTML in shared notes shows as text.
 
-**Trash.** Moving a note or folder to the trash puts it in the vault's `.trash` folder. Settings → **Trash** lists what's there, puts an item back where it was (beside it, numbered, if that name is taken now), and deletes items, or everything, for good.
+**Trash.** Moving a note or folder to the trash puts it in the vault's `.trash` folder. The **Trash** button at the bottom of the sidebar (with a count) lists what's there, puts an item back where it was (beside it, numbered, if that name is taken now), and deletes items, or everything, for good.
+
+**The ⋯ menu** holds only things to do with the open note, A to Z: Apply template, Deleted tasks, History, Move to trash, Properties, Share. Rename a note by clicking its name; sync by clicking the sync status; themes and templates are in Settings. Drag the sidebar's edge to make it wider or narrower (double-click the edge to reset).
+
+**Settings → About** shows the versions of the server and of the app you have open, what the server runs on, and which optional features (public links, note history, sign-in) are available.
 
 **Updates.** The server fingerprints the app's files when it starts. An open app (an installed one on a phone especially) checks the fingerprint whenever you come back to it, and reloads into the new version after saving your note, so it never keeps running old code or styles.
 
@@ -220,15 +238,18 @@ Custom CSS can restyle anything, but the theme colours and fonts all come from t
 | `--warn` | warnings, "offline" save status |
 | `--mark` | search highlights (`<mark>`) |
 | `--code-bg` | code blocks and inline code |
+| `--hl-kw` `--hl-str` `--hl-num` `--hl-fn` `--hl-type` `--hl-attr` `--hl-com` | code block colours: keywords, strings, numbers and literals, functions, types and decorators, keys/attributes/variables, comments |
 | `--radius` | corner rounding (`8px`; Terminal uses `0`) |
 | `--sans` | interface and preview font |
 | `--mono` | editor and code font |
 
-Useful selectors: `#editor` (the source editor), `#preview` / `.md` (rendered notes), `#sidebar`, `#tree`, `.tag`, `.task-cb` (checkboxes), `.done-item`, `.cancelled-item`, `.progress-item`, `.due.overdue`.
+Useful selectors: `#editor` (the source editor), `.codeblock[data-family="py"]` (code blocks by language), `#preview` / `.md` (rendered notes), `#sidebar`, `#tree`, `.tag`, `.task-cb` (checkboxes), `.done-item`, `.cancelled-item`, `.progress-item`, `.due.overdue`.
 
 | Key | |
 |---|---|
 | Ctrl+P / Ctrl+O | quick switcher (type a new name to create a note) |
+| Ctrl+Shift+P / F1 | command palette |
+| Ctrl+/ | keybindings |
 | Ctrl+L | make the line a checklist item; again turns it back into a plain line |
 | right-click a checkbox (preview) | set it to to do `[ ]`, in progress `[/]`, done `[x]` or cancelled `[-]` |
 | Enter / Tab / Shift+Tab | continue, indent, or outdent lists |

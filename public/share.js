@@ -2,6 +2,7 @@
 // allows it, editable (checkboxes in the page, and Edit for the note's markdown).
 import { marked } from './vendor/marked.esm.js';
 import { checkboxLines, toggleLine } from './shared/tasks.js';
+import { highlight } from './shared/highlight.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const safeUrl = (u) => !/^\s*(javascript|vbscript|data):/i.test(u || '');
@@ -30,6 +31,10 @@ marked.use({
       if (!safeUrl(href)) return text;
       const ext = /^(https?:|mailto:)/i.test(href);
       return `<a href="${esc(href)}"${t ? ` title="${esc(t)}"` : ''}${ext ? ' target="_blank" rel="noopener noreferrer"' : ''}>${text}</a>`;
+    },
+    code({ text, lang }) {
+      const h = highlight(text.replace(/\n$/, ''), lang);
+      return `<div class="codeblock" data-family="${esc(h.family)}"${h.label ? ` data-lang="${esc(h.label)}"` : ''}><pre><code>${h.html}</code></pre></div>\n`;
     },
     image({ href, title: t, text }) {
       if (!safeUrl(href) || !/^https?:/i.test(href)) return esc(text); // vault-relative images aren't shared

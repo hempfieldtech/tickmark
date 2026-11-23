@@ -19,23 +19,31 @@
     <aside id="sidebar">
       <div class="side-head">
         <span class="brand"><img src="/icons/icon.svg" alt="" width="20" height="20"> <span class="brand-name">Tickmark</span></span>
+      </div>
+      <div class="search-wrap">
+        <input id="search" type="search" placeholder="Search notes" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="tree-tools">
         <button class="icon-btn" id="btn-new" title="New note (Ctrl+N)" aria-label="New note">
           <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
         <button class="icon-btn" id="btn-new-folder" title="New folder" aria-label="New folder">
           <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/></svg></button>
       </div>
-      <div class="search-wrap">
-        <input id="search" type="search" placeholder="Search notes" autocomplete="off" spellcheck="false">
-      </div>
       <div id="tree" role="tree"></div>
       <div id="search-results" hidden></div>
       <div class="side-foot">
+        <button id="btn-trash" class="side-link" title="Notes and folders you moved to the trash">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>
+          <span class="label">Trash</span><span class="count" id="trash-count"></span></button>
+        <div class="side-foot-row">
         <button id="btn-sync" class="sync-btn" title="Sync with CalDAV">
           <span class="dot"></span><span class="label">Not configured</span>
         </button>
         <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+        </div>
       </div>
+      <div id="side-resize" role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" title="Drag to resize · double-click to reset" tabindex="0"></div>
     </aside>
     <div id="scrim"></div>
 
@@ -54,7 +62,9 @@
           <button data-view="split" class="split-only">Split</button>
           <button data-view="read">Preview</button>
         </div>
-        <button class="icon-btn" id="btn-more" aria-label="More" title="More">
+        <button class="icon-btn" id="btn-help" aria-label="Help" title="Help and keyboard shortcuts">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6"/><path d="M12 17h.01"/></svg></button>
+        <button class="icon-btn" id="btn-more" aria-label="Note actions" title="Note actions">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg></button>
       </header>
 
@@ -64,12 +74,21 @@
           <p class="hint">Tag a checklist item with <code>#task</code>, or put <code>#sync</code> on a heading, to send it to your CalDAV task list.</p>
         </div>
         <textarea id="editor" spellcheck="true" hidden></textarea>
+        <div id="gutter" aria-hidden="true" hidden><div class="gutter-in"></div></div>
+        <div id="cursors" aria-hidden="true"></div>
         <div id="preview-wrap" hidden>
           <article id="preview" class="md"></article>
           <div id="backlinks"></div>
         </div>
       </section>
-      <footer id="word-count" aria-live="off" hidden></footer>
+      <footer id="word-count" aria-live="off" hidden>
+        <span id="vim-mode" hidden></span>
+        <span id="wc-words"></span>
+        <span id="wc-lines" hidden></span>
+        <span id="wc-tasks" hidden></span>
+        <button type="button" id="wc-share" hidden></button>
+        <form id="vim-prompt" hidden><span class="vim-prefix"></span><input autocomplete="off" spellcheck="false" aria-label="Vim command"></form>
+      </footer>
     </main>
     <aside id="props" class="props" hidden aria-labelledby="props-title">
       <header class="set-head">
@@ -94,16 +113,17 @@
     <div class="set-wrap">
       <nav class="set-nav" aria-label="Settings sections">
         <h2>Settings</h2>
+        <button type="button" data-sec="about">About</button>
+        <button type="button" data-sec="account">Account</button>
         <button type="button" data-sec="appearance">Appearance</button>
         <button type="button" data-sec="caldav">CalDAV accounts</button>
         <button type="button" data-sec="deleted">Deleted tasks</button>
-        <button type="button" data-sec="help">Help (README)</button>
+        <button type="button" data-sec="editor">Editor</button>
         <button type="button" data-sec="shares">Public links</button>
         <button type="button" data-sec="sso">Single sign-on</button>
         <button type="button" data-sec="templates">Templates</button>
-        <button type="button" data-sec="trash">Trash</button>
         <button type="button" data-sec="users">Users</button>
-        <button type="button" data-sec="account">Your account</button>
+        <button type="button" id="btn-logout" class="nav-logout" hidden>Sign out</button>
       </nav>
       <div class="set-main">
         <header class="set-head">
@@ -140,13 +160,14 @@
             <p class="note">Your own styles, on top of the theme, on every device you sign in on. Changes show as you type; Save keeps them.
               Handy variables: <code>--accent</code> <code>--bg</code> <code>--surface</code> <code>--panel</code> <code>--text</code> <code>--muted</code> <code>--line</code> <code>--sans</code> <code>--mono</code> <code>--radius</code>.
               If something goes wrong, open Tickmark with <code>?nocss</code> on the end of the address to load it without them.</p>
-            <textarea id="custom-css" rows="9" spellcheck="false" autocomplete="off" placeholder=":root { --accent: hotpink; }&#10;#editor { font-family: 'Comic Sans MS', cursive; }"></textarea>
+            <textarea id="custom-css-input" rows="9" spellcheck="false" autocomplete="off" placeholder=":root { --accent: hotpink; }&#10;#editor { font-family: 'Comic Sans MS', cursive; }"></textarea>
             <div class="row">
               <button type="button" id="btn-css-save" class="btn primary">Save</button>
               <button type="button" id="btn-css-revert" class="btn">Undo changes</button>
               <span class="note" id="css-state"></span>
             </div>
           </div>
+          <div id="branding-wrap">
           <h4 class="sub-head" id="branding">Branding</h4>
           <div class="brand-pane">
           <p class="note">The name and pictures this Tickmark shows everyone: in the sidebar, on the sign-in screen, in browser tabs, and as the installed app.
@@ -169,6 +190,19 @@
           <div class="row"><button type="button" id="btn-brand-save" class="btn primary">Save</button>
             <button type="button" id="btn-brand-reset" class="btn">Reset all to default</button><span class="note" id="brand-state"></span></div>
           </div>
+          </div>
+        </section>
+
+        <section data-sec="editor" class="set-body">
+          <p class="note">How the editor behaves on this device.</p>
+          <label class="check"><input type="checkbox" id="opt-vim"> Vim mode
+            <span class="note">(normal, insert and visual modes, motions, operators, counts, text objects, search, marks and <code>:</code> commands; the bottom bar shows the mode)</span></label>
+          <label class="check"><input type="checkbox" id="opt-lines"> Line numbers
+            <span class="note">(beside the text, and the note's line count in the bottom bar)</span></label>
+        </section>
+
+        <section data-sec="about" class="set-body">
+          <dl id="about-list" class="about"><dt>Loading…</dt></dl>
         </section>
 
 
@@ -186,7 +220,8 @@
             and checklist items in a template never sync.</p>
           <ul id="tpl-list" class="users"></ul>
           <p class="note" id="tpl-empty" hidden>No templates yet.</p>
-          <div><button type="button" id="btn-tpl-new" class="btn">+ New template</button></div>
+          <div class="row"><button type="button" id="btn-tpl-new" class="btn">+ New template</button>
+            <button type="button" id="btn-tpl-from-note" class="btn" hidden>+ From the open note</button></div>
           <div class="card tpl-edit" id="tpl-edit" hidden>
             <label>Name <input id="tpl-name" autocomplete="off" spellcheck="false" placeholder="Meeting notes"></label>
             <label>Content <textarea id="tpl-content" rows="12" spellcheck="false" placeholder="# {{title}}&#10;&#10;Date: {{date}}&#10;&#10;## Actions&#10;- [ ] "></textarea></label>
@@ -195,17 +230,6 @@
           </div>
         </section>
 
-        <section data-sec="trash" class="set-body">
-          <p class="note">Notes and folders you moved to the trash. They stay in the vault's <code>.trash</code> folder until you delete them here.
-            Restore puts one back where it was.</p>
-          <ul id="trash-list" class="users deleted"></ul>
-          <p class="note" id="trash-empty" hidden>The trash is empty.</p>
-          <div><button type="button" id="btn-trash-empty" class="btn danger" hidden>Empty trash…</button></div>
-        </section>
-
-        <section data-sec="help" class="set-body">
-          <article id="readme" class="md readme"><p class="note">Loading…</p></article>
-        </section>
 
         <section data-sec="shares" class="set-body">
           <p class="note">Notes and folders you've shared. Anyone with a link can read what it points to (for a folder, every note in it,
@@ -216,10 +240,7 @@
         </section>
 
         <section data-sec="account" class="set-body">
-          <div class="row between">
-            <p class="me-line">Signed in as <b id="me-name"></b> <span id="me-badges"></span></p>
-            <button type="button" id="btn-logout" class="btn">Sign out</button>
-          </div>
+          <p class="me-line">Signed in as <b id="me-name"></b> <span id="me-badges"></span></p>
           <div class="card" id="me-password">
             <h4 id="me-password-title">Change password</h4>
             <div class="row end">
@@ -337,6 +358,7 @@
       </div>
       <div class="row end">
         <label class="grow">Inbox note for tasks created elsewhere <input data-f="inboxFile" placeholder="Inbox.md"></label>
+        <button type="button" data-act="history" class="btn" hidden>Sync history</button>
         <button type="button" data-act="remove" class="btn danger">Remove</button>
       </div>
     </fieldset>
@@ -356,6 +378,56 @@
       <ul id="deleted-list" class="users deleted"></ul>
       <p class="note" id="deleted-empty" hidden>Nothing deleted recently.</p>
       <div><button type="button" id="btn-empty-deleted" class="btn danger" hidden>Empty Deleted tasks…</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-trash" class="dlg deleted-dlg" aria-labelledby="trash-title">
+    <header class="set-head">
+      <h3 id="trash-title">Trash</h3>
+      <button type="button" class="icon-btn" data-close aria-label="Close" title="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="set-body">
+      <p class="note">Notes and folders you moved to the trash. They stay in the vault's <code>.trash</code> folder until you delete them here.
+        Restore puts one back where it was.</p>
+      <ul id="trash-list" class="users deleted"></ul>
+      <p class="note" id="trash-empty" hidden>The trash is empty.</p>
+      <div><button type="button" id="btn-trash-empty" class="btn danger" hidden>Empty trash…</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-help" class="dlg help-dlg" aria-labelledby="help-title">
+    <header class="set-head">
+      <h3 id="help-title">Help</h3>
+      <button type="button" class="icon-btn" data-close aria-label="Close" title="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="help-body">
+      <nav id="help-toc" class="help-toc" aria-label="Contents"></nav>
+      <article id="readme" class="md readme"><p class="note">Loading…</p></article>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-keys" class="dlg keys-dlg" aria-labelledby="keys-title">
+    <header class="set-head">
+      <h3 id="keys-title">Keybindings</h3>
+      <button type="button" class="icon-btn" data-close aria-label="Close" title="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="keys-search"><input id="keys-search" type="search" placeholder="Search shortcuts, e.g. checklist or ctrl+l" autocomplete="off" spellcheck="false" aria-label="Search shortcuts"></div>
+    <div id="keys-list" class="keys-list"></div>
+  </dialog>
+
+  <dialog id="dlg-synclog" class="dlg deleted-dlg" aria-labelledby="synclog-title">
+    <header class="set-head">
+      <h3 id="synclog-title">Sync history</h3>
+      <button type="button" class="icon-btn" data-close aria-label="Close" title="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="set-body">
+      <div class="row between"><p class="note">The last 30 syncs of this account, newest first. Open one to see what was sent to and received from the server.</p>
+        <label class="check"><input type="checkbox" id="synclog-changes"> Only syncs that changed something</label></div>
+      <ul id="synclog-list" class="synclog"></ul>
     </div>
   </dialog>
 

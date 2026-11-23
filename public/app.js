@@ -3,6 +3,8 @@ import { checkboxLines, toggleLine, setTaskState, fileCompleted, openSubtasks, p
 import { parseRecurrence, describeRecurrence } from './shared/recur.js';
 import { textStats } from './shared/words.js';
 import { parseFrontmatter, writeFrontmatter } from './shared/frontmatter.js';
+import { highlight } from './shared/highlight.js';
+import { Vim } from './vim.js';
 
 // ---------------------------------------------------------------- utilities
 const $ = (s, root = document) => root.querySelector(s);
@@ -11,7 +13,7 @@ const enc = encodeURIComponent;
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 // Per-user keys (notes cache, unsaved edits, settings) are namespaced by the signed-in user, so two
 // people sharing a browser never see, or save into, each other's notes. View prefs are per device.
-const DEVICE_KEYS = new Set(['view', 'noSidebar']);
+const DEVICE_KEYS = new Set(['view', 'noSidebar', 'vim', 'lineNumbers', 'sideWidth']);
 const store = {
   user: '',
   key(k) { return 'tickmark:' + (this.user && !DEVICE_KEYS.has(k) ? `u:${this.user}:` : '') + k; },
@@ -124,6 +126,11 @@ marked.use({
       const text = this.parser.parseInline(tokens);
       if (!safeUrl(href)) return text;
       return `<a href="${esc(href)}"${title ? ` title="${esc(title)}"` : ''}>${text}</a>`;
+    },
+    // Fenced code: highlighted for its language, with the language's name on the block.
+    code({ text, lang }) {
+      const h = highlight(text.replace(/\n$/, ''), lang);
+      return `<div class="codeblock" data-family="${esc(h.family)}"${h.label ? ` data-lang="${esc(h.label)}"` : ''}><pre><code>${h.html}</code></pre></div>\n`;
     },
     image({ href, title, text }) {
       if (!safeUrl(href)) return esc(text);
@@ -371,11 +378,25 @@ async function editEmbedded(path, fn) {
 }
 const schedulePreview = (() => { let raf = 0; return () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderPreview); }; })();
 
+const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? '' : 's'}`;
+const TASK_STATES = [[' ', 'todo', 'to do'], ['/', 'progress', 'in progress'], ['x', 'done', 'done'], ['-', 'cancelled', 'cancelled']];
+/** The bar under the note: words and characters, lines (with line numbers on), its checklist items by state, and its public link. */
 function renderWordCount() {
   if (S.mode !== 'note') return;
-  const { words, chars } = textStats(el.editor.value);
-  const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? '' : 's'}`;
-  el.wordCount.textContent = `${plural(words, 'word')} · ${plural(chars, 'character')}`;
+  const text = el.editor.value;
+  const { words, chars } = textStats(text);
+  $('#wc-words').textContent = `${plural(words, 'word')} · ${plural(chars, 'character')}`;
+  const lines = text.split('\n');
+  $('#wc-lines').hidden = !S.lineNumbers;
+  if (S.lineNumbers) $('#wc-lines').textContent = plural(lines.length, 'line');
+  const count = { ' ': 0, '/': 0, x: 0, '-': 0 };
+  for (const ln of checkboxLines(text)) { const ch = lines[ln].match(/\[([ xX/-])\]/)?.[1]; if (ch) count[ch === 'X' ? 'x' : ch]++; }
+  const shown = TASK_STATES.filter(([ch]) => count[ch]);
+  const tasks = $('#wc-tasks');
+  tasks.hidden = !shown.length;
+  tasks.innerHTML = shown.map(([ch, cls, name]) => `<span class="st-count" title="${count[ch]} ${name}"><span class="st st-${cls}"></span>${count[ch]} ${name}</span>`).join('');
+  tasks.title = 'Checklist items in this note';
+  renderShareBadge();
 }
 const scheduleWordCount = (() => { let t = 0; return () => { clearTimeout(t); t = setTimeout(renderWordCount, 150); }; })();
 
@@ -472,22 +493,28 @@ el.editor.addEventListener('blur', () => { if (el.editor.value !== S.base) flush
 
 // ---- [[wikilink]] suggestions: typing [[ lists matching notes; ↑/↓ to pick, Enter or Tab to insert.
 const suggest = { box: null, items: [], i: 0, start: 0 };
-/** Where the caret is on screen (a hidden copy of the textarea up to the caret). */
-function caretXY(ta, pos) {
-  const m = document.createElement('div');
+/** A hidden copy of a textarea's text box (same font, padding and wrapping width), for measuring. */
+function textMirror(ta) {
+  let m = textMirror.el;
+  if (!m) { m = textMirror.el = document.createElement('div'); m.setAttribute('aria-hidden', 'true'); document.body.append(m); }
   const cs = getComputedStyle(ta);
-  for (const p of ['font', 'lineHeight', 'letterSpacing', 'tabSize', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderLeftWidth', 'boxSizing', 'width', 'whiteSpace', 'wordWrap', 'overflowWrap'])
-    m.style[p] = cs[p];
-  Object.assign(m.style, { position: 'absolute', visibility: 'hidden', whiteSpace: 'pre-wrap', wordWrap: 'break-word', top: '0', left: '-9999px' });
+  for (const p of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'wordSpacing', 'tabSize', 'textTransform', 'textIndent',
+    'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft']) m.style[p] = cs[p];
+  // clientWidth leaves out the scrollbar, so lines wrap where the textarea wraps them.
+  Object.assign(m.style, { position: 'absolute', visibility: 'hidden', top: '0', left: '-9999px', whiteSpace: 'pre-wrap', overflowWrap: 'break-word',
+    wordWrap: 'break-word', boxSizing: 'border-box', border: '0', width: ta.clientWidth + 'px', height: 'auto', overflow: 'hidden' });
+  return m;
+}
+/** Where a position in a textarea is: on screen (x, y), and from the top of its text (top, for scrolling). */
+function caretXY(ta, pos) {
+  const m = textMirror(ta);
   m.textContent = ta.value.slice(0, pos);
   const mark = document.createElement('span');
   mark.textContent = '\u200b';
   m.append(mark);
-  document.body.append(m);
   const r = ta.getBoundingClientRect();
-  const out = { x: r.left + mark.offsetLeft - ta.scrollLeft, y: r.top + mark.offsetTop - ta.scrollTop, h: parseFloat(cs.lineHeight) || 20 };
-  m.remove();
-  return out;
+  return { x: r.left + ta.clientLeft + mark.offsetLeft - ta.scrollLeft, y: r.top + ta.clientTop + mark.offsetTop - ta.scrollTop,
+    top: mark.offsetTop, h: parseFloat(getComputedStyle(ta).lineHeight) || 20 };
 }
 function closeSuggest() { suggest.box?.remove(); suggest.box = null; suggest.items = []; }
 
@@ -665,6 +692,109 @@ el.editor.addEventListener('scroll', () => {
   const ratio = ed.scrollTop / Math.max(1, ed.scrollHeight - ed.clientHeight);
   pw.scrollTop = ratio * (pw.scrollHeight - pw.clientHeight);
 });
+
+// ---- line numbers (Settings → Editor): a gutter beside the text, one number per line however it wraps
+const gutter = $('#gutter'), gutterIn = gutter.firstElementChild;
+S.lineNumbers = !!store.get('lineNumbers', false);
+function setLineNumbers(on) {
+  S.lineNumbers = !!on;
+  store.set('lineNumbers', S.lineNumbers);
+  el.app.classList.toggle('line-numbers', S.lineNumbers);
+  renderGutter();
+  renderWordCount();
+}
+el.app.classList.toggle('line-numbers', S.lineNumbers);
+function renderGutter() {
+  const ed = el.editor;
+  if (!S.lineNumbers || S.mode !== 'note' || effectiveView() === 'read' || ed.hidden) { gutter.hidden = true; return; }
+  gutter.hidden = false;
+  const cs = getComputedStyle(ed), m = textMirror(ed);
+  const lines = ed.value.split('\n');
+  m.innerHTML = lines.map((l) => `<div>${esc(l) || ' '}</div>`).join('');
+  const heights = [...m.children].map((d) => d.offsetHeight);
+  m.textContent = '';
+  const padL = parseFloat(cs.paddingLeft), W = 44;
+  Object.assign(gutter.style, { top: ed.offsetTop + 'px', left: Math.max(0, ed.offsetLeft + padL - W - 14) + 'px', width: W + 'px', height: ed.clientHeight + 'px' });
+  gutterIn.style.paddingTop = cs.paddingTop;
+  gutterIn.style.lineHeight = cs.lineHeight;
+  gutterIn.innerHTML = heights.map((h, i) => `<div style="height:${h}px">${i + 1}</div>`).join('');
+  gutterIn.style.transform = `translateY(${-ed.scrollTop}px)`;
+  markGutterLine();
+}
+function markGutterLine() {
+  if (gutter.hidden) return;
+  const ln = el.editor.value.slice(0, el.editor.selectionStart).split('\n').length - 1;
+  gutterIn.querySelector('.cur')?.classList.remove('cur');
+  gutterIn.children[ln]?.classList.add('cur');
+}
+const scheduleGutter = debounce(renderGutter, 120);
+el.editor.addEventListener('scroll', () => { if (!gutter.hidden) gutterIn.style.transform = `translateY(${-el.editor.scrollTop}px)`; renderCursorsSoon(); });
+el.editor.addEventListener('input', () => { scheduleGutter(); renderCursorsSoon(); });
+document.addEventListener('selectionchange', () => { if (document.activeElement === el.editor) markGutterLine(); });
+addEventListener('resize', debounce(() => { renderGutter(); renderCursors(); sizeTitle(); }, 150));
+
+// ---- other people's cursors (live collaboration): a coloured caret with their name, where they are in the text
+function renderCursors() {
+  const box = $('#cursors');
+  const ed = el.editor;
+  const others = othersHere().filter((p) => p.line != null);
+  if (!others.length || S.mode !== 'note' || effectiveView() === 'read' || ed.hidden) { box.innerHTML = ''; return; }
+  const lines = ed.value.split('\n');
+  const wr = $('#workspace').getBoundingClientRect(), er = ed.getBoundingClientRect();
+  box.innerHTML = others.map((p) => {
+    const ln = Math.min(p.line, lines.length - 1);
+    let off = 0;
+    for (let i = 0; i < ln; i++) off += lines[i].length + 1;
+    off += Math.min(p.col ?? 0, lines[ln].length);
+    const c = caretXY(ed, off);
+    const name = p.name ? `${p.name} · ${p.device}` : p.device;
+    // Above or below what's showing: a marker on that edge of the editor instead.
+    const edge = c.y < er.top ? 'above' : c.y + c.h > er.bottom ? 'below' : null;
+    const top = edge === 'above' ? er.top - wr.top : edge === 'below' ? er.bottom - wr.top - 20 : c.y - wr.top;
+    return `<span class="rcursor${edge ? ' edge ' + edge : ''}" style="--h:${hue(p.id)};left:${Math.max(er.left - wr.left, c.x - wr.left)}px;top:${top}px;height:${edge ? 20 : c.h}px">` +
+      `<span class="rname">${edge === 'above' ? '↑ ' : edge === 'below' ? '↓ ' : ''}${esc(name)}</span></span>`;
+  }).join('');
+}
+const renderCursorsSoon = (() => { let raf = 0; return () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderCursors); }; })();
+
+// ---- Vim mode (Settings → Editor, per device)
+const vim = new Vim(el.editor, {
+  replace: (s0, e0, t) => replaceRange(s0, e0, t),
+  save: () => save(),
+  quit: () => closeNote(),
+  open: (name) => openLink(name),
+  help: () => openKeys('vim'),
+  prompt: (prefix, value) => vimPrompt(prefix, value),
+  onMode: (label) => { const m = $('#vim-mode'); m.hidden = !label; m.textContent = label; m.dataset.mode = vim?.mode || ''; },
+  toast: (msg) => toast(msg),
+  caretTop: (p) => caretXY(el.editor, p).top,
+  lineHeight: () => parseFloat(getComputedStyle(el.editor).lineHeight) || 24,
+  setOption: (k, v) => { if (k === 'number') setLineNumbers(v); },
+});
+S.vim = !!store.get('vim', false);
+if (S.vim) vim.enable();
+function setVim(on) {
+  S.vim = !!on;
+  store.set('vim', S.vim);
+  if (S.vim) vim.enable(); else vim.disable();
+  if (!S.vim) $('#vim-mode').hidden = true;
+}
+/** The : and / line of Vim mode, in the bottom bar. Resolves with what was typed, or null for Esc. */
+function vimPrompt(prefix, value = '') {
+  const form = $('#vim-prompt'), input = form.querySelector('input');
+  form.querySelector('.vim-prefix').textContent = prefix;
+  input.value = value;
+  form.hidden = false;
+  input.focus();
+  return new Promise((res) => {
+    const done = (v) => { form.hidden = true; form.onsubmit = input.onkeydown = input.onblur = null; res(v); };
+    form.onsubmit = (e) => { e.preventDefault(); done(input.value); };
+    input.onkeydown = (e) => {
+      if (e.key === 'Escape' || (e.key === 'Backspace' && !input.value)) { e.preventDefault(); e.stopPropagation(); done(null); }
+    };
+    input.onblur = () => setTimeout(() => { if (!form.hidden) done(null); }, 0);
+  });
+}
 
 // ---------------------------------------------------------------- preview interaction
 // Right-click a checkbox in the preview to pick its state.
@@ -853,7 +983,7 @@ addEventListener('pagehide', () => {
 });
 
 // ---------------------------------------------------------------- opening notes
-async function open(path, { line = null, push = true } = {}) {
+async function open(path, { line = null, push = true, find = null } = {}) {
   if (!path) return;
   if (path !== S.path && !closeProps()) return;
   await flushSave();
@@ -874,8 +1004,10 @@ async function open(path, { line = null, push = true } = {}) {
   if (push && location.hash !== '#' + enc(path)) history.pushState(null, '', '#' + enc(path));
   el.title.value = basename(path);
   el.title.disabled = false;
+  sizeTitle();
   el.crumbs.textContent = dirname(path) ? dirname(path).replaceAll('/', ' / ') + ' /' : '';
   document.title = `${basename(path)} · ${S.brand?.name || 'Tickmark'}`;
+  vim.reset();
   applyView();
   renderPreview();
   renderWordCount();
@@ -897,8 +1029,65 @@ async function open(path, { line = null, push = true } = {}) {
     el.editor.scrollTop = 0;
     el.previewWrap.scrollTop = 0;
   }
+  if (find) revealText(find);
   loadBacklinks();
 }
+
+/** Show where `q` (a search) first appears in the open note: selected in the editor, marked in the preview. */
+function revealText(q) {
+  const v = el.editor.value, lower = v.toLowerCase();
+  const terms = [q, ...q.split(/\s+/)].map((t) => t.replace(/^[-+"'(]+|["')*]+$/g, '').trim()).filter((t) => t && !/^(and|or|not|near)$/i.test(t));
+  let at = -1, len = 0;
+  for (const t of terms) { const i = lower.indexOf(t.toLowerCase()); if (i >= 0) { at = i; len = t.length; break; } }
+  if (at < 0) return;
+  const view = effectiveView();
+  if (view !== 'read') {
+    if (!mobile.matches) el.editor.focus({ preventScroll: true });
+    el.editor.setSelectionRange(at, at + len);
+    el.editor.scrollTop = Math.max(0, caretXY(el.editor, at).top - el.editor.clientHeight / 3);
+  }
+  if (view !== 'edit') {
+    const term = lower.slice(at, at + len);
+    setTimeout(() => { // after the split view's scroll-sync has moved the preview
+      const walk = document.createTreeWalker(el.preview, NodeFilter.SHOW_TEXT);
+      for (let n; (n = walk.nextNode());) {
+        const i = n.data.toLowerCase().indexOf(term);
+        if (i < 0) continue;
+        const r = document.createRange();
+        r.setStart(n, i); r.setEnd(n, i + term.length);
+        const mark = document.createElement('mark');
+        mark.className = 'find-hit';
+        r.surroundContents(mark);
+        mark.scrollIntoView({ block: 'center' });
+        setTimeout(() => { if (mark.isConnected) mark.replaceWith(...mark.childNodes); }, 2500);
+        break;
+      }
+    }, 80);
+  }
+}
+
+/** No note open (Vim's :q). */
+async function closeNote() {
+  if (S.mode !== 'note') return;
+  if (!closeProps()) return;
+  await flushSave();
+  S.path = null; S.mode = 'empty';
+  el.title.value = ''; el.crumbs.textContent = '';
+  history.pushState(null, '', location.pathname + location.search);
+  document.title = S.brand?.name || 'Tickmark';
+  applyView(); updateSaveState(); renderTree(); reportPresence();
+}
+
+/** The note-name box is as wide as the name (it's also how you rename). */
+function sizeTitle() {
+  const t = el.title, cs = getComputedStyle(t);
+  const ctx = (sizeTitle.ctx ||= document.createElement('canvas').getContext('2d'));
+  ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  const w = ctx.measureText(t.value || ' ').width;
+  t.style.width = Math.ceil(w + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 6) + 'px';
+}
+el.title.addEventListener('input', sizeTitle);
+document.fonts?.ready.then(sizeTitle);
 
 async function reloadIfClean() {
   if (S.mode !== 'note' || !S.path || S.saving || el.editor.value !== S.base) return;
@@ -940,6 +1129,8 @@ function applyView() {
   el.previewWrap.hidden = !note;
   el.wordCount.hidden = !note;
   el.empty.hidden = S.mode !== 'empty';
+  $('#btn-more').hidden = !note; // its menu is only about the open note
+  requestAnimationFrame(() => { renderGutter(); renderCursors(); });
   document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.view === effectiveView()));
   if (note && effectiveView() !== 'edit') schedulePreview();
 }
@@ -958,6 +1149,34 @@ function toggleSidebar() {
   else { el.app.classList.toggle('no-sidebar'); store.set('noSidebar', el.app.classList.contains('no-sidebar')); }
 }
 $('#btn-menu').onclick = toggleSidebar;
+
+// The sidebar's width: drag its right edge (double-click puts it back), or use ← → on the handle.
+const SIDE_MIN = 180, SIDE_MAX = 560;
+function setSideWidth(w, keep = false) {
+  if (w == null) { el.app.style.removeProperty('--side-w'); store.del('sideWidth'); return; }
+  w = Math.round(Math.max(SIDE_MIN, Math.min(SIDE_MAX, w, innerWidth - 320)));
+  el.app.style.setProperty('--side-w', w + 'px');
+  if (keep) store.set('sideWidth', w);
+}
+if (store.get('sideWidth')) setSideWidth(store.get('sideWidth'));
+{
+  const h = $('#side-resize');
+  h.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    h.setPointerCapture(e.pointerId);
+    el.app.classList.add('resizing');
+    const move = (ev) => setSideWidth(ev.clientX);
+    const up = (ev) => { h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); el.app.classList.remove('resizing'); setSideWidth(ev.clientX, true); renderGutter(); };
+    h.addEventListener('pointermove', move);
+    h.addEventListener('pointerup', up);
+  });
+  h.addEventListener('dblclick', () => { setSideWidth(null); renderGutter(); });
+  h.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    setSideWidth($('#sidebar').offsetWidth + (e.key === 'ArrowRight' ? 16 : -16), true);
+  });
+}
 $('#scrim').onclick = () => el.app.classList.remove('sidebar-open');
 if (store.get('noSidebar')) el.app.classList.add('no-sidebar');
 
@@ -974,6 +1193,8 @@ async function loadTree() {
     if (t) { S.files = t.files; S.folders = t.folders; }
   }
   renderTree();
+  updateTrashCount();
+  loadShareIndex();
 }
 const scheduleTree = debounce(loadTree, 200);
 
@@ -1082,6 +1303,7 @@ async function movePath(from, to) {
       S.path = to + S.path.slice(from.length);
       history.replaceState(null, '', '#' + enc(S.path));
       el.title.value = basename(S.path);
+      sizeTitle();
       el.crumbs.textContent = dirname(S.path) ? dirname(S.path).replaceAll('/', ' / ') + ' /' : '';
     }
     if (r.updated?.includes(S.path)) reloadIfClean();
@@ -1113,6 +1335,7 @@ async function trashPath(path, isFolder) {
       applyView(); updateSaveState();
     }
     await loadTree();
+    toast(`Moved to the trash`, { label: 'Open Trash', run: openTrash });
   } catch (e) { toast(e.message); }
 }
 
@@ -1150,33 +1373,33 @@ $('#btn-new-folder').onclick = () => newFolder(S.path ? dirname(S.path) : '');
 async function commitTitle() {
   if (S.mode !== 'note' || !S.path) return;
   const name = el.title.value.trim();
-  if (!name || name === basename(S.path)) { el.title.value = basename(S.path); return; }
-  if (/[/\\]/.test(name)) { toast('Names cannot contain / or \\'); el.title.value = basename(S.path); return; }
+  if (!name || name === basename(S.path)) { el.title.value = basename(S.path); sizeTitle(); return; }
+  if (/[/\\]/.test(name)) { toast('Names cannot contain / or \\'); el.title.value = basename(S.path); sizeTitle(); return; }
   await movePath(S.path, joinPath(dirname(S.path), name + '.md'));
 }
 el.title.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); el.title.blur(); }
-  if (e.key === 'Escape') { el.title.value = S.path ? basename(S.path) : ''; el.title.blur(); }
+  if (e.key === 'Escape') { el.title.value = S.path ? basename(S.path) : ''; sizeTitle(); el.title.blur(); }
 });
 el.title.addEventListener('blur', commitTitle);
 
+// ⋯: things to do with the open note, and only that (A to Z). Renaming is the name box, syncing the
+// sync status, themes and templates live in Settings.
 $('#btn-more').onclick = (e) => {
-  const note = S.mode === 'note';
+  if (S.mode !== 'note') return;
   showMenu(e.currentTarget, [
-    ...(note ? [
-      { label: 'Rename', run: () => { el.title.focus(); el.title.select(); } },
-    ] : []),
-    ...(note ? [{ label: 'Share…', run: () => openShare(S.path, false) }] : []),
-    ...(note ? [{ label: 'Properties…', run: () => openProps() }] : []),
-    ...(note ? [{ label: 'History…', run: () => openHistory() }] : []),
-    ...(note ? [{ label: 'Apply template…', expand: (b) => expandTemplatePicker(b) }] : []),
-    ...(note && !isTemplate(S.path) ? [{ label: 'Save as template…', run: () => saveAsTemplate() }] : []),
-    { label: 'Sync now', run: () => runSync({ manual: true }) },
-    ...(note ? [{ label: 'Deleted tasks in this note…', run: () => openDeleted({ path: S.path }) }] : [{ label: 'Deleted tasks…', run: () => openSettings('deleted') }]),
-    { label: 'Theme…', run: () => openSettings('appearance') },
-    ...(note ? [{ label: 'Move to trash', danger: true, run: () => trashPath(S.path, false) }] : []),
+    { label: 'Apply template…', expand: (b) => expandTemplatePicker(b) },
+    { label: 'Deleted tasks…', run: () => openDeleted({ path: S.path }) },
+    { label: 'History…', run: () => openHistory() },
+    { label: 'Move to trash', danger: true, run: () => trashPath(S.path, false) },
+    { label: 'Properties…', run: () => openProps() },
+    { label: 'Share…', run: () => openShare(S.path, false) },
   ]);
 };
+$('#btn-help').onclick = (e) => showMenu(e.currentTarget, [
+  { label: 'Help', run: () => openHelp() },
+  { label: 'Keybindings', run: () => openKeys() },
+]);
 
 // ---------------------------------------------------------------- search
 const runSearch = debounce(async () => {
@@ -1202,7 +1425,8 @@ el.search.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { el.search.value = ''; runSearch(); el.search.blur(); }
   if (e.key === 'Enter') el.results.querySelector('.sr-item')?.click();
 });
-el.results.addEventListener('click', (e) => { const r = e.target.closest('.sr-item'); if (r) open(r.dataset.path); });
+// A result opens its note at the first place the search appears.
+el.results.addEventListener('click', (e) => { const r = e.target.closest('.sr-item'); if (r) open(r.dataset.path, { find: el.search.value.trim() }); });
 
 // ---------------------------------------------------------------- quick switcher
 const sw = { dlg: $('#dlg-switcher'), input: $('#switcher-input'), list: $('#switcher-list'), items: [], sel: 0 };
@@ -1214,35 +1438,123 @@ function fuzzy(q, s) {
   }
   return j === q.length ? score - s.length * 0.05 : -1;
 }
-function renderSwitcher() {
-  const q = sw.input.value.trim();
+/** Notes for the quick switcher: fuzzy by name (then path), recent first when nothing is typed, and "Create". */
+function noteItems(q, { create = true, prefix = '' } = {}) {
   const files = S.files.filter((f) => !isTemplate(f.path));
-  sw.items = (q
+  const list = (q
     ? files.map((f) => ({ f, s: fuzzy(q, basename(f.path)) * 2 + Math.max(0, fuzzy(q, f.path)) })).filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).map((x) => x.f)
     : [...files].sort((a, b) => b.mtime - a.mtime)).slice(0, 50);
-  sw.sel = Math.min(sw.sel, Math.max(0, sw.items.length - 1));
-  sw.list.innerHTML = sw.items.map((f, i) => `<li data-i="${i}" class="${i === sw.sel ? 'sel' : ''}">${esc(basename(f.path))}<span class="dir">${esc(dirname(f.path))}</span></li>`).join('') +
-    (q && !sw.items.some((f) => basename(f.path).toLowerCase() === q.toLowerCase()) ? `<li data-new="1" class="${sw.items.length ? '' : 'sel'}">Create “${esc(q)}”</li>` : '');
+  const items = list.map((f) => ({ label: prefix + basename(f.path), detail: dirname(f.path), run: () => open(f.path) }));
+  if (create && q && !files.some((f) => basename(f.path).toLowerCase() === q.toLowerCase())) items.push({ label: `Create “${q}”`, run: () => newNote('', q) });
+  return items;
 }
-function openSwitcher() { sw.input.value = ''; sw.sel = 0; renderSwitcher(); sw.dlg.showModal(); sw.input.focus(); }
+/** The picker dialog: a search box over a list of { label, detail, hint, run } from `source(query)`. */
+function openPicker(source, placeholder) {
+  sw.source = source;
+  sw.input.placeholder = placeholder;
+  sw.input.value = ''; sw.sel = 0;
+  renderSwitcher();
+  if (!sw.dlg.open) sw.dlg.showModal();
+  sw.input.focus();
+}
+function renderSwitcher() {
+  sw.items = sw.source(sw.input.value.trim());
+  sw.sel = Math.min(sw.sel, Math.max(0, sw.items.length - 1));
+  sw.list.innerHTML = sw.items.length ? sw.items.map((it, i) => `<li data-i="${i}" class="${i === sw.sel ? 'sel' : ''}"><span class="lbl">${esc(it.label)}</span>` +
+    (it.detail ? `<span class="dir">${esc(it.detail)}</span>` : '') + (it.hint ? `<span class="hint">${kbdHtml(it.hint)}</span>` : '') + '</li>').join('')
+    : '<li class="none">No matches</li>';
+}
+function openSwitcher() { openPicker((q) => noteItems(q), 'Jump to note…'); }
 function pickSwitcher(i) {
-  const q = sw.input.value.trim();
-  sw.dlg.close();
-  if (sw.items[i]) open(sw.items[i].path);
-  else if (q) newNote('', q);
+  const it = sw.items[i];
+  if (!it) return;
+  if (!it.keep) sw.dlg.close();
+  if (it.recent) rememberCommand(it.recent);
+  it.run();
 }
 sw.input.addEventListener('input', () => { sw.sel = 0; renderSwitcher(); });
 sw.input.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
-    const n = sw.list.children.length;
+    const n = sw.items.length;
     sw.sel = (sw.sel + (e.key === 'ArrowDown' ? 1 : n - 1)) % Math.max(1, n);
     [...sw.list.children].forEach((li, i) => li.classList.toggle('sel', i === sw.sel));
     sw.list.children[sw.sel]?.scrollIntoView({ block: 'nearest' });
-  } else if (e.key === 'Enter') { e.preventDefault(); pickSwitcher(sw.items.length ? sw.sel : -1); }
+  } else if (e.key === 'Enter') { e.preventDefault(); pickSwitcher(sw.sel); }
 });
-sw.list.addEventListener('click', (e) => { const li = e.target.closest('li'); if (li) pickSwitcher(li.dataset.new ? -1 : +li.dataset.i); });
+sw.list.addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) pickSwitcher(+li.dataset.i); });
 sw.dlg.addEventListener('click', (e) => { if (e.target === sw.dlg) sw.dlg.close(); });
+
+// ---- command palette (Ctrl+Shift+P or F1): everything you can do, by name, plus notes to open
+const recentCommands = () => store.get('recentCommands', []);
+function rememberCommand(id) { store.set('recentCommands', [id, ...recentCommands().filter((x) => x !== id)].slice(0, 8)); }
+function commands() {
+  const note = S.mode === 'note';
+  const view = (v) => () => { S.view = v; store.set('view', v); applyView(); };
+  const list = [
+    { id: 'goto', label: 'Go to note…', hint: 'Ctrl+P', run: () => setTimeout(openSwitcher) },
+    { id: 'new-note', label: 'New note', hint: 'Ctrl+N', run: () => newNote() },
+    { id: 'new-folder', label: 'New folder', run: () => newFolder(S.path ? dirname(S.path) : '') },
+    { id: 'search', label: 'Search in all notes', hint: 'Ctrl+Shift+F', run: () => { if (mobile.matches) el.app.classList.add('sidebar-open'); el.search.focus(); } },
+    ...(note ? [
+      { id: 'note-rename', label: 'Note: Rename', run: () => { el.title.focus(); el.title.select(); } },
+      { id: 'note-move', label: 'Note: Move to folder…', run: () => moveToFolder(S.path) },
+      { id: 'note-template', label: 'Note: Apply template…', run: () => setTimeout(() => openPicker(templateItems, 'Apply template…')) },
+      { id: 'note-props', label: 'Note: Properties…', run: () => openProps() },
+      { id: 'note-history', label: 'Note: History…', run: () => openHistory() },
+      { id: 'note-share', label: 'Note: Share…', run: () => openShare(S.path, false) },
+      { id: 'note-deleted', label: 'Note: Deleted tasks…', run: () => openDeleted({ path: S.path }) },
+      { id: 'note-link', label: 'Note: Copy link to this note', run: () => copyText(`[[${basename(S.path)}]]`, 'Link copied') },
+      { id: 'note-reveal', label: 'Note: Show in the sidebar', run: () => revealInTree(S.path) },
+      { id: 'note-close', label: 'Note: Close', run: () => closeNote() },
+      { id: 'note-trash', label: 'Note: Move to trash', run: () => trashPath(S.path, false) },
+    ] : []),
+    { id: 'view-source', label: 'View: Source', hint: 'Ctrl+E', run: view('edit') },
+    ...(mobile.matches ? [] : [{ id: 'view-split', label: 'View: Split', hint: 'Ctrl+E', run: view('split') }]),
+    { id: 'view-preview', label: 'View: Preview', hint: 'Ctrl+E', run: view('read') },
+    { id: 'view-sidebar', label: 'View: Show or hide the sidebar', hint: 'Ctrl+\\', run: () => toggleSidebar() },
+    { id: 'view-collapse', label: 'View: Collapse all folders', run: () => { S.openFolders.clear(); store.set('openFolders', []); renderTree(); } },
+    { id: 'editor-vim', label: `Editor: ${S.vim ? 'Turn off' : 'Turn on'} Vim mode`, run: () => { setVim(!S.vim); toast(`Vim mode ${S.vim ? 'on' : 'off'}`); } },
+    { id: 'editor-lines', label: `Editor: ${S.lineNumbers ? 'Hide' : 'Show'} line numbers`, run: () => setLineNumbers(!S.lineNumbers) },
+    { id: 'sync-now', label: 'Sync: Sync now', run: () => runSync({ manual: true }) },
+    ...(S.config?.accounts || []).filter((a) => a.id).map((a) => ({ id: 'sync-log-' + a.id, label: `Sync: History of ${a.name}…`, run: () => openSyncLog(a.id, a.name) })),
+    { id: 'trash', label: 'Trash…', run: () => openTrash() },
+    { id: 'deleted-all', label: 'Deleted tasks (all notes)…', run: () => openSettings('deleted') },
+    ...Object.entries(SECTIONS).filter(([k]) => sectionVisible(k)).map(([k, name]) => ({ id: 'set-' + k, label: `Settings: ${name}`, run: () => openSettings(k) })),
+    ...THEMES.map(([id, name]) => ({ id: 'theme-' + id, label: `Theme: ${name}`, run: () => { window.tickmarkTheme?.set(id); toast(`Theme: ${name}`); } })),
+    { id: 'help', label: 'Help', run: () => openHelp() },
+    { id: 'keys', label: 'Keybindings', hint: 'Ctrl+/', run: () => openKeys() },
+    ...(isMulti() ? [{ id: 'sign-out', label: 'Sign out', run: () => signOut() }] : []),
+  ];
+  return list;
+}
+function commandItems(q) {
+  const all = commands().map((c) => ({ ...c, recent: c.id }));
+  if (!q) {
+    const recent = recentCommands().map((id) => all.find((c) => c.id === id)).filter(Boolean);
+    return [...recent.map((c) => ({ ...c, detail: 'recent' })), ...all.filter((c) => !recent.includes(c))];
+  }
+  const hits = all.map((c) => ({ c, s: fuzzy(q, c.label) })).filter((x) => x.s >= 0).sort((a, b) => b.s - a.s).map((x) => x.c);
+  return [...hits, ...noteItems(q, { create: false, prefix: 'Open: ' }).slice(0, 8)];
+}
+function openPalette() { openPicker(commandItems, 'Type a command, or a note to open…'); }
+function templateItems(q) {
+  const list = templates().filter((f) => !q || templateName(f.path).toLowerCase().includes(q.toLowerCase()));
+  return list.length ? list.map((f) => ({ label: templateName(f.path), run: () => applyTemplate(f.path) })) : [];
+}
+async function copyText(text, done) {
+  try { await navigator.clipboard.writeText(text); toast(done); } catch { toast(text); }
+}
+function revealInTree(path) {
+  const parts = dirname(path).split('/').filter(Boolean);
+  parts.forEach((_, i) => S.openFolders.add(parts.slice(0, i + 1).join('/')));
+  store.set('openFolders', [...S.openFolders]);
+  el.search.value = ''; el.results.hidden = true; el.tree.hidden = false;
+  renderTree();
+  if (mobile.matches) el.app.classList.add('sidebar-open');
+  else if (el.app.classList.contains('no-sidebar')) toggleSidebar();
+  el.tree.querySelector(`.t-row[data-path="${CSS.escape(path)}"]`)?.scrollIntoView({ block: 'nearest' });
+}
 
 // ---------------------------------------------------------------- sync
 function relTime(iso) {
@@ -1350,6 +1662,9 @@ function addAccountBox(a = {}) {
   field(box, 'inboxFile').value = a.inboxFile || (first ? 'Inbox.md' : '');
   field(box, 'inboxFile').placeholder = first ? 'Inbox.md' : 'Inbox (name).md';
   box.querySelector('[data-act="discover"]').onclick = () => discover(box);
+  const hist = box.querySelector('[data-act="history"]');
+  hist.hidden = !a.id;
+  hist.onclick = () => openSyncLog(a.id, field(box, 'name').value || a.name);
   field(box, 'calendarUrl').addEventListener('change', (e) => {
     if (e.target.value === NEW_LIST) newTaskList(box); else e.target.dataset.last = e.target.value;
   });
@@ -1412,15 +1727,15 @@ async function discover(box) {
 // The settings pane: a menu of sections. CalDAV accounts and Sync share one form and Save button;
 // the others act immediately (account, users) or have their own Save (single sign-on).
 const SECTIONS = {
-  caldav: 'CalDAV accounts', account: 'Your account', users: 'Users', sso: 'Single sign-on', appearance: 'Appearance', help: 'Help',
-  shares: 'Public links', deleted: 'Deleted tasks', templates: 'Templates', trash: 'Trash',
+  about: 'About', account: 'Account', appearance: 'Appearance', caldav: 'CalDAV accounts', deleted: 'Deleted tasks', editor: 'Editor',
+  shares: 'Public links', sso: 'Single sign-on', templates: 'Templates', users: 'Users',
 };
 const setDlg = $('#dlg-settings');
 const isMulti = () => S.me?.mode === 'multi' && !!S.me.user;
 const isAdmin = () => isMulti() && !!S.me.user.admin;
 
 function sectionVisible(sec) {
-  if (sec === 'account') return isMulti();
+  if (sec === 'account') return isMulti() && !!S.me.user.hasPassword; // nothing to manage without a password
   if (sec === 'users' || sec === 'sso') return !isMulti() || isAdmin(); // single-user: offers turning sign-in on
   return true;
 }
@@ -1442,10 +1757,37 @@ function showSection(sec) {
   if (sec === 'sso') loadSso();
   if (sec === 'appearance') { renderThemes(); renderCssEditor(); renderBranding(); }
   if (sec === 'shares') loadShares();
-  if (sec === 'help') loadReadme();
   if (sec === 'deleted') loadDeleted('set');
   if (sec === 'templates') renderTemplates();
-  if (sec === 'trash') loadTrash();
+  if (sec === 'about') loadAbout();
+  if (sec === 'editor') { $('#opt-vim').checked = S.vim; $('#opt-lines').checked = S.lineNumbers; }
+  $('#btn-logout').hidden = !isMulti();
+}
+$('#opt-vim').onchange = (e) => setVim(e.target.checked);
+$('#opt-lines').onchange = (e) => setLineNumbers(e.target.checked);
+
+// ---- Settings → About
+async function loadAbout() {
+  const dl = $('#about-list');
+  let a;
+  try { a = await api('GET', '/api/about'); } catch (e) { dl.innerHTML = `<dt class="note err">${esc(e.message)}</dt>`; return; }
+  const dur = (s) => (s < 3600 ? `${Math.max(1, Math.round(s / 60))} min` : s < 86400 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} days`);
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  const rows = [
+    ['Tickmark', a.version],
+    ['Server build', a.build],
+    ['This app\'s build', BUILD === 'dev' ? 'dev (not served by Tickmark)' : BUILD + (BUILD === a.build ? ' (up to date)' : ' (reload to update)')],
+    ['Running on', `Node.js ${a.node} · ${a.os} (${a.arch})${a.docker ? ' · Docker' : ''}`],
+    ['Up since', `${new Date(a.startedAt).toLocaleString()} (${dur(a.uptime)})`],
+    ['Sign-in', a.mode === 'multi' ? `On${a.users != null ? `, ${plural(a.users, 'user')}` : ''}${a.sso ? ' · SSO' : ''}${a.passwordSignIn === false ? ' · no passwords' : ''}` : 'Off (single user)'],
+    ['Public links', a.publicUrl ? 'Available' : 'Need a public URL (TICKMARK_PUBLIC_URL)'],
+    ['Note history', a.history ? 'On (git)' : 'Off: git isn\'t installed on the server'],
+    ['Your notes', `${plural(a.notes, 'note')} in ${plural(a.folders, 'folder')}`],
+    ['CalDAV accounts', a.accounts ? String(a.accounts) : 'None set up'],
+    ['This device', `${standalone ? 'Installed app' : 'Browser tab'} · ${navigator.serviceWorker?.controller ? 'works offline' : 'online only'}`],
+  ];
+  dl.innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('') +
+    `<dt>Source</dt><dd><a href="https://github.com/hempfieldtech/tickmark" target="_blank" rel="noopener">github.com/hempfieldtech/tickmark</a></dd>`;
 }
 setDlg.querySelectorAll('.set-nav [data-sec]').forEach((b) => (b.onclick = () => showSection(b.dataset.sec)));
 setDlg.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { e.preventDefault(); showSection(g.dataset.goto); } });
@@ -1494,9 +1836,14 @@ $('#themes').addEventListener('click', (e) => {
   $(`#themes .theme-opt[data-id="${b.dataset.id}"]`)?.focus();
 });
 
-// ---- Settings → Help: the README, rendered
+// ---- Help (the ? menu): the README, with its contents as a tree on the left
+const helpDlg = $('#dlg-help');
+async function openHelp() {
+  if (!helpDlg.open) helpDlg.showModal();
+  await loadReadme();
+}
 async function loadReadme() {
-  const box = $('#readme');
+  const box = $('#readme'), toc = $('#help-toc');
   if (box.dataset.loaded) return;
   try {
     const { markdown } = await api('GET', '/api/readme');
@@ -1504,34 +1851,140 @@ async function loadReadme() {
     cbIndex = 0;
     box.innerHTML = marked.parse(markdown);
     box.querySelectorAll('input').forEach((i) => (i.disabled = true));
-    // A table of contents from the README's sections, at the top.
-    const heads = [...box.querySelectorAll('h2')];
-    if (heads.length > 2) {
-      const toc = document.createElement('nav');
-      toc.className = 'toc';
-      toc.setAttribute('aria-label', 'Contents');
-      toc.innerHTML = '<h4>Contents</h4><ul>' + heads.map((h) => {
-        const subs = [];
-        for (let n = h.nextElementSibling; n && n.tagName !== 'H2'; n = n.nextElementSibling) if (n.tagName === 'H3') subs.push(n);
-        const link = (x) => `<a href="#${esc(slug(x.textContent))}">${esc(x.textContent)}</a>`;
-        return `<li>${link(h)}${subs.length ? `<ul>${subs.map((x) => `<li>${link(x)}</li>`).join('')}</ul>` : ''}</li>`;
-      }).join('') + '</ul>';
-      heads[0].before(toc); // after the introduction
+    const heads = [...box.querySelectorAll('h1, h2, h3')];
+    heads.forEach((h) => (h.id = slug(h.textContent)));
+    // The tree: ## sections, each opening to its ### subsections.
+    let html = '<button type="button" class="toc-toggle" aria-label="Show the contents">Contents</button><input type="search" class="toc-filter" placeholder="Filter" aria-label="Filter the contents" autocomplete="off"><ul class="toc-tree">';
+    const h2s = heads.filter((h) => h.tagName === 'H2');
+    for (const h of h2s) {
+      const subs = [];
+      for (let n = h.nextElementSibling; n && n.tagName !== 'H2'; n = n.nextElementSibling) if (n.tagName === 'H3') subs.push(n);
+      html += `<li class="${subs.length ? 'has-kids' : ''}"><div class="toc-row">${subs.length ? '<button type="button" class="toc-twist" aria-label="Show subsections" aria-expanded="false">' + CHEV + '</button>' : '<span class="toc-twist"></span>'}` +
+        `<a href="#${esc(h.id)}">${esc(h.textContent)}</a></div>` +
+        (subs.length ? `<ul hidden>${subs.map((x) => `<li><a href="#${esc(x.id)}">${esc(x.textContent)}</a></li>`).join('')}</ul>` : '') + '</li>';
     }
+    toc.innerHTML = html + '</ul>';
     box.querySelectorAll('a[href]').forEach((a) => {
       const h = a.getAttribute('href');
-      if (h.startsWith('#')) { // in-page links: scroll within the settings pane
-        a.onclick = (e) => {
-          e.preventDefault();
-          const id = decodeURIComponent(h.slice(1));
-          [...box.querySelectorAll('h1,h2,h3,h4')].find((x) => slug(x.textContent) === id)?.scrollIntoView({ behavior: 'smooth' });
-        };
-      } else if (/^https?:/i.test(h)) { a.target = '_blank'; a.rel = 'noopener'; }
+      if (h.startsWith('#')) return;
+      if (/^https?:/i.test(h)) { a.target = '_blank'; a.rel = 'noopener'; }
       else a.href = `https://github.com/hempfieldtech/tickmark/blob/master/${h}`;
     });
     box.dataset.loaded = '1';
+    markHelpSection();
   } catch (e) { box.innerHTML = `<p class="note err">${esc(e.message)}</p>`; }
 }
+/** In-page links (the tree, and links inside the README) scroll the README. */
+helpDlg.addEventListener('click', (e) => {
+  if (e.target.closest('.toc-toggle')) { $('#help-toc').classList.toggle('open'); return; }
+  const tw = e.target.closest('button.toc-twist');
+  if (tw) { const ul = tw.closest('li').querySelector(':scope > ul'); ul.hidden = !ul.hidden; tw.setAttribute('aria-expanded', String(!ul.hidden)); return; }
+  const a = e.target.closest('a[href^="#"]');
+  if (!a) return;
+  e.preventDefault();
+  const id = decodeURIComponent(a.getAttribute('href').slice(1));
+  const target = $('#readme').querySelector(`[id="${CSS.escape(id)}"]`) || [...$('#readme').querySelectorAll('h1,h2,h3,h4')].find((x) => slug(x.textContent) === id);
+  target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (mobile.matches && a.closest('#help-toc')) $('#help-toc').classList.remove('open');
+});
+/** Highlight the section being read, and open its branch of the tree. */
+function markHelpSection() {
+  const box = $('#readme');
+  const heads = [...box.querySelectorAll('h2, h3')];
+  let cur = null;
+  for (const h of heads) { if (h.offsetTop - box.offsetTop <= box.scrollTop + 24) cur = h; else break; }
+  const toc = $('#help-toc');
+  toc.querySelectorAll('a.cur').forEach((a) => a.classList.remove('cur'));
+  if (!cur) return;
+  const link = toc.querySelector(`a[href="#${CSS.escape(cur.id)}"]`);
+  if (!link) return;
+  link.classList.add('cur');
+  const branch = link.closest('ul[hidden]');
+  if (branch) { branch.hidden = false; branch.closest('li').querySelector('.toc-twist')?.setAttribute('aria-expanded', 'true'); }
+  link.scrollIntoView({ block: 'nearest' });
+}
+$('#readme').addEventListener('scroll', debounce(markHelpSection, 60));
+$('#help-toc').addEventListener('input', (e) => {
+  if (!e.target.matches('.toc-filter')) return;
+  const q = e.target.value.trim().toLowerCase();
+  for (const li of $('#help-toc').querySelectorAll('.toc-tree > li')) {
+    const kids = [...li.querySelectorAll('ul li')];
+    const own = li.querySelector('.toc-row a').textContent.toLowerCase().includes(q);
+    kids.forEach((k) => (k.hidden = !!q && !own && !k.textContent.toLowerCase().includes(q)));
+    const anyKid = kids.some((k) => !k.hidden);
+    li.hidden = !!q && !own && !anyKid;
+    const ul = li.querySelector('ul');
+    if (ul && q) ul.hidden = !anyKid;
+  }
+});
+
+// ---- Keybindings (the ? menu): every shortcut, grouped by what it does, with a search
+const KEYMAP = [
+  { group: 'Notes and navigation', items: [
+    ['Ctrl+P', 'Jump to a note (quick switcher); type a new name to create it'], ['Ctrl+O', 'Jump to a note'],
+    ['Ctrl+Shift+P', 'Command palette: every action by name, and notes to open'], ['F1', 'Command palette'],
+    ['Ctrl+N', 'New note'], ['Ctrl+Shift+F', 'Search the text of all notes'], ['Ctrl+S', 'Save now (it also saves by itself)'],
+  ] },
+  { group: 'Views and panels', items: [
+    ['Ctrl+E', 'Switch between Source, Split and Preview'], ['Ctrl+\\', 'Show or hide the sidebar'],
+    ['Ctrl+/', 'These keybindings'], ['Esc', 'Close a dialog, menu or the Properties panel'],
+  ] },
+  { group: 'Writing', items: [
+    ['Enter', 'Continue a list or checklist; on an empty item, end the list'],
+    ['Tab', 'Indent the list item (or the selected lines)'], ['Shift+Tab', 'Outdent the list item (or the selected lines)'],
+    ['[[', 'Link to a note: suggestions appear; ↑ ↓ to pick, Enter or Tab to insert, Esc to close'],
+    [':cal', 'Shortcodes as you type: :calendar: :tomorrow: :nextweek: :recur: :highest: :high: :medium: :low: :lowest: :done:'],
+  ] },
+  { group: 'Checklists', items: [
+    ['Ctrl+L', 'Make the line a checklist item, or a checklist item a plain line again'],
+    ['Click', 'A checkbox in the preview: check or uncheck it (embedded notes too)'],
+    ['Right-click', 'A checkbox in the preview: pick its state (to do, in progress, done, cancelled)'],
+  ] },
+  { group: 'Lists and pickers', items: [
+    ['↑ / ↓', 'Move through the switcher, palette, suggestions and template search'], ['Enter', 'Pick the highlighted entry'],
+    ['Ctrl+S', 'Save the Properties panel or Custom CSS while you\'re in it'],
+  ] },
+  { group: 'Vim mode (Settings → Editor)', id: 'vim', items: [
+    ['Esc / Ctrl+[', 'Back to normal mode'], ['i a I A o O', 'Insert before, after, at line start/end, on a new line below/above'],
+    ['h j k l', 'Left, down, up, right (with a count: 5j)'], ['w b e W B E ge', 'Word motions'], ['0 ^ $ g_', 'Line start, first non-blank, line end'],
+    ['gg G 42G :42', 'First line, last line, line 42'], ['{ } %', 'Paragraph back/forward, matching bracket'],
+    ['f F t T ; ,', 'Find a character on the line, and repeat'], ['/ ? n N * #', 'Search forward/back, next/previous, the word under the cursor'],
+    ['d c y', 'Delete, change, yank with a motion or object: dw, c$, y3j, ci", da(, yip'], ['dd cc yy >> <<', 'The whole line (with a count: 3dd)'],
+    ['x X s S D C Y', 'Shortcuts for dl dh cl cc d$ c$ yy'], ['p P', 'Put after/before (lines go below/above)'], ['"a "+', 'Use register a, or the clipboard'],
+    ['r R ~ J gJ', 'Replace a character, replace mode, toggle case, join lines'], ['g~ gu gU', 'Toggle/lower/upper case with a motion'],
+    ['u Ctrl+R .', 'Undo, redo, repeat the last change'], ['v V gv o', 'Visual and visual-line mode, reselect, other end'],
+    ['m{a-z} \'{a-z} `{a-z}', 'Set a mark, jump to its line or its exact place'], ['Ctrl+D Ctrl+U Ctrl+F Ctrl+B', 'Half page / page down and up'],
+    ['Ctrl+E Ctrl+Y zz zt zb', 'Scroll a line, centre/top/bottom the cursor'], ['Ctrl+A Ctrl+X', 'Add to / subtract from the number at the cursor'],
+    [':w :q :wq :x ZZ', 'Save, close the note, both'], [':s/a/b/g :%s :\'<,\'>s', 'Substitute on the line, the note, the selection'],
+    [':d :y :sort :noh', 'Delete or yank lines, sort them, clear the search'], [':set nu :set nonu', 'Line numbers on or off'], [':e Name', 'Open (or create) a note'],
+  ] },
+];
+const keysDlg = $('#dlg-keys');
+/** "Ctrl+Shift+P" → <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>; "A / B" are alternatives. */
+function kbdHtml(keys) {
+  return keys.split(' / ').map((alt) => /^[A-Za-z]+\+/.test(alt) && !/\s/.test(alt)
+    ? alt.split(/\+(?!$)/).map((k) => `<kbd>${esc(k)}</kbd>`).join('+')
+    : alt.split(' ').map((k) => `<kbd>${esc(k)}</kbd>`).join(' ')).join(' <span class="or-key">or</span> ');
+}
+function renderKeys() {
+  const q = $('#keys-search').value.trim().toLowerCase();
+  const out = KEYMAP.map((g) => {
+    const rows = g.items.filter(([k, d]) => !q || k.toLowerCase().includes(q) || d.toLowerCase().includes(q) || g.group.toLowerCase().includes(q));
+    if (!rows.length) return '';
+    return `<section${g.id ? ` id="keys-${g.id}"` : ''}><h4>${esc(g.group)}</h4><dl>${rows.map(([k, d]) => `<dt>${kbdHtml(k)}</dt><dd>${esc(d)}</dd>`).join('')}</dl></section>`;
+  }).join('');
+  $('#keys-list').innerHTML = out || '<p class="note">No shortcuts match.</p>' ;
+  if (!q) $('#keys-list').insertAdjacentHTML('afterbegin', '<p class="note">On a Mac, use ⌘ where it says Ctrl.' + (S.vim ? ' Vim mode is on: in the editor\'s normal mode the Vim keys at the end apply, Ctrl+E F B D U Y R A X included.' : '') + '</p>');
+}
+function openKeys(section) {
+  $('#keys-search').value = '';
+  renderKeys();
+  if (!keysDlg.open) keysDlg.showModal();
+  if (section) $(`#keys-${section}`)?.scrollIntoView();
+  else $('#keys-search').focus();
+}
+$('#keys-search').addEventListener('input', renderKeys);
+
 const slug = (t) => t.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-');
 
 // ---- Properties: the note's frontmatter as a form in a side panel; nothing is written until Save
@@ -1667,6 +2120,9 @@ const templateName = (p) => p.slice(TEMPLATES.length + 1).replace(/\.md$/i, '');
 const tpl = { editing: null, base: '' }; // editing: the template's path, or '' for a new one
 function renderTemplates() {
   const list = templates(), ul = $('#tpl-list');
+  const fromNote = $('#btn-tpl-from-note');
+  fromNote.hidden = S.mode !== 'note' || isTemplate(S.path);
+  if (!fromNote.hidden) fromNote.textContent = `+ From “${basename(S.path)}”`;
   $('#tpl-empty').hidden = list.length > 0;
   ul.hidden = !list.length;
   ul.innerHTML = '';
@@ -1703,6 +2159,7 @@ function closeTemplateEditor() {
   return true;
 }
 $('#btn-tpl-new').onclick = () => editTemplate('');
+$('#btn-tpl-from-note').onclick = async () => { await saveAsTemplate(); renderTemplates(); };
 $('#btn-tpl-cancel').onclick = () => { tpl.base = $('#tpl-content').value; tpl.editing && ($('#tpl-name').value = templateName(tpl.editing)); closeTemplateEditor(); };
 $('#btn-tpl-save').onclick = async () => {
   const name = $('#tpl-name').value.trim();
@@ -1737,7 +2194,7 @@ function expandTemplatePicker(btn) {
   const box = document.createElement('div');
   box.className = 'menu-pick';
   if (!list.length) {
-    box.innerHTML = `<p class="note">No templates yet. Make one in Settings → Templates, or with Save as template.</p>`;
+    box.innerHTML = `<p class="note">No templates yet. Make one in Settings → Templates.</p>`;
     btn.replaceWith(box);
     return;
   }
@@ -1795,6 +2252,22 @@ async function saveAsTemplate() {
 }
 
 // ---- public links
+/** Which notes and folders are shared (for the bottom bar's "Public link"). */
+async function loadShareIndex() {
+  try { S.shares = (await api('GET', '/api/shares')).shares || []; } catch { return; }
+  renderShareBadge();
+}
+const shareOf = (path) => (S.shares || []).find((x) => (x.kind === 'note' && x.path === path) || (x.kind === 'folder' && (path || '').startsWith(x.path + '/')));
+function renderShareBadge() {
+  const b = $('#wc-share'), sh = S.mode === 'note' ? shareOf(S.path) : null;
+  b.hidden = !sh;
+  if (!sh) return;
+  const folder = sh.kind === 'folder';
+  b.innerHTML = `<svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>` +
+    `Public link${sh.edit ? ' · anyone can edit' : ''}${folder ? ` · via folder ${esc(sh.path.split('/').pop())}` : ''}`;
+  b.title = `${folder ? `The folder “${sh.path}” is` : 'This note is'} shared: ${sh.url}`;
+  b.onclick = () => openShare(sh.path, folder);
+}
 const shareDlg = $('#dlg-share');
 const shareState = { path: null, folder: false, share: null };
 async function openShare(path, folder) {
@@ -1829,6 +2302,7 @@ $('#share-edit').onchange = async (e) => {
   try {
     shareState.share = await api('PUT', '/api/shares', { token: shareState.share.token, edit: want });
     renderShare();
+    loadShareIndex();
     toast(want ? 'People with the link can now edit' : 'The link is read-only again');
   } catch (err) { e.target.checked = !want; toast(err.message); }
 };
@@ -1836,6 +2310,7 @@ $('#btn-share-create').onclick = async () => {
   try {
     shareState.share = await api('POST', '/api/shares', { path: shareState.path });
     renderShare();
+    loadShareIndex();
     $('#share-url').select();
     try { await navigator.clipboard.writeText(shareState.share.url); toast('Link created and copied'); } catch { toast('Link created'); }
   } catch (e) { toast(e.message); }
@@ -1846,7 +2321,7 @@ $('#btn-share-copy').onclick = async () => {
 };
 $('#btn-share-stop').onclick = async () => {
   if (!confirm('Stop sharing? The link stops working, and sharing again makes a new one.')) return;
-  try { await api('DELETE', `/api/shares?token=${enc(shareState.share.token)}`); shareState.share = null; renderShare(); toast('No longer shared'); } catch (e) { toast(e.message); }
+  try { await api('DELETE', `/api/shares?token=${enc(shareState.share.token)}`); shareState.share = null; renderShare(); loadShareIndex(); toast('No longer shared'); } catch (e) { toast(e.message); }
 };
 
 async function loadShares() {
@@ -1866,7 +2341,7 @@ async function loadShares() {
     li.querySelector('[data-act="copy"]').onclick = async () => { try { await navigator.clipboard.writeText(sh.url); toast('Link copied'); } catch { toast(sh.url); } };
     li.querySelector('[data-act="stop"]').onclick = async () => {
       if (!confirm(`Stop sharing “${label}”? The link stops working.`)) return;
-      try { await api('DELETE', `/api/shares?token=${enc(sh.token)}`); loadShares(); } catch (e) { toast(e.message); }
+      try { await api('DELETE', `/api/shares?token=${enc(sh.token)}`); loadShares(); loadShareIndex(); } catch (e) { toast(e.message); }
     };
     ul.append(li);
   }
@@ -1890,6 +2365,7 @@ function renderBranding() {
   for (const k of Object.keys(brandDraft)) delete brandDraft[k];
   $('#brand-name').value = b.customName ? b.name : '';
   const editable = canBrand();
+  $('#branding-wrap').hidden = !editable; // only admins see (and change) branding
   $('#brand-admin-note').hidden = editable;
   for (const x of document.querySelectorAll('.brand-pane input, .brand-pane button')) x.disabled = !editable;
   renderBrandImages();
@@ -1940,7 +2416,7 @@ $('#btn-brand-save').onclick = async () => {
 };
 
 // ---- custom CSS: live while typing, saved per user (follows them to every device)
-const cssBox = $('#custom-css');
+const cssBox = $('#custom-css-input');
 const savedCss = () => S.config?.customCss || '';
 function applyCustomCss() { window.tickmarkCss?.apply(savedCss()); }
 function renderCssEditor() {
@@ -1996,6 +2472,51 @@ form.addEventListener('submit', async (e) => {
     if (syncConfigured()) runSync({ manual: true });
   } catch (err) { toast(err.message); }
 });
+
+// ---------------------------------------------------------------- sync history (per account)
+const logDlg = $('#dlg-synclog');
+const PRIO = { 1: '🔺 high', 5: '🔼 medium', 9: '🔽 low' };
+function showValue(field, v) {
+  if (v == null || v === '' || v === 0) return field === 'done' ? 'not done' : '—';
+  if (field === 'done') return v ? 'done' : 'not done';
+  if (field === 'priority') return PRIO[v] || String(v);
+  if (field === 'repeats') return describeRecurrence(v);
+  if (field === 'title') return `“${v}”`;
+  return String(v);
+}
+async function openSyncLog(id, name) {
+  logDlg.dataset.id = id;
+  $('#synclog-title').textContent = `Sync history · ${name}`;
+  $('#synclog-list').innerHTML = '<li class="note">Loading…</li>';
+  if (!logDlg.open) logDlg.showModal();
+  try { logDlg.runs = await api('GET', `/api/sync/history?account=${enc(id)}`); } catch (e) { $('#synclog-list').innerHTML = `<li class="note err">${esc(e.message)}</li>`; return; }
+  renderSyncLog();
+}
+function renderSyncLog() {
+  const only = $('#synclog-changes').checked;
+  const changed = (r) => r.error || r.errors?.length || Object.values(r.counts || {}).some(Boolean);
+  const runs = (logDlg.runs || []).filter((r) => !only || changed(r));
+  const ul = $('#synclog-list');
+  if (!runs.length) { ul.innerHTML = `<li class="note">${only ? 'No syncs changed anything lately.' : 'No syncs yet. They show up here from now on.'}</li>`; return; }
+  ul.innerHTML = runs.map((r) => {
+    const c = r.counts || {};
+    const sent = (c.created || 0) + (c.pushed || 0) + (c.deletedRemote || 0), got = (c.pulled || 0) + (c.imported || 0) + (c.deletedLocal || 0);
+    const summary = r.error ? esc(r.error) : sent || got || r.errors?.length
+      ? [sent && `↑ ${sent} sent`, got && `↓ ${got} received`, r.errors?.length && `${r.errors.length} failed`].filter(Boolean).join(' · ')
+      : 'No changes';
+    const items = (r.items || []).map((it) => {
+      const what = { created: 'new task', updated: 'changed', deleted: 'deleted', new: 'new task' }[it.kind] || it.kind;
+      const ch = (it.changes || []).map((x) => `${esc(x.field)}: ${esc(showValue(x.field, x.from))} → ${esc(showValue(x.field, x.to))}`).join('; ');
+      return `<li class="${it.dir}"><span class="arrow" title="${it.dir === 'sent' ? 'Sent to the server' : 'Received from the server'}">${it.dir === 'sent' ? '↑' : '↓'}</span>` +
+        `<span><b>${esc(it.title || '(untitled)')}</b> <span class="meta">${esc(what)}${it.path ? ` · ${esc(basename(it.path))}` : ''}</span>${ch ? `<span class="chg">${ch}</span>` : ''}</span></li>`;
+    }).join('') + (r.more ? `<li class="note">…and ${r.more} more</li>` : '') + (r.errors || []).map((e) => `<li class="err"><span class="arrow">!</span><span>${esc(e)}</span></li>`).join('');
+    const d = new Date(r.at);
+    return `<li class="run ${r.error ? 'bad' : changed(r) ? 'changed' : 'quiet'}"><details${items ? '' : ' class="no-items"'}><summary>` +
+      `<span class="dot"></span><span class="when" title="${esc(d.toLocaleString())}">${esc(d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }))}</span>` +
+      `<span class="sum">${summary}</span></summary>${items ? `<ul class="items">${items}</ul>` : ''}</details></li>`;
+  }).join('');
+}
+$('#synclog-changes').onchange = renderSyncLog;
 
 // ---------------------------------------------------------------- deleted tasks
 const SOURCE = { notes: 'removed from your notes', remote: 'deleted in a task app', both: 'deleted in both places' };
@@ -2099,12 +2620,20 @@ for (const [view, v] of Object.entries(DEL_VIEWS)) {
   };
 }
 
-// ---------------------------------------------------------------- trash (Settings → Trash)
+// ---------------------------------------------------------------- trash (the sidebar's Trash button)
+const trashDlg = $('#dlg-trash');
+function openTrash() { loadTrash(); if (!trashDlg.open) trashDlg.showModal(); }
+$('#btn-trash').onclick = () => openTrash();
+/** How many things are in the trash, beside the sidebar's Trash button. */
+async function updateTrashCount() {
+  try { const n = (await api('GET', '/api/trash')).length; $('#trash-count').textContent = n ? String(n) : ''; } catch {}
+}
 const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 async function loadTrash() {
   const ul = $('#trash-list');
   let list;
   try { list = await api('GET', '/api/trash'); } catch (e) { ul.innerHTML = `<li class="note err">${esc(e.message)}</li>`; return; }
+  $('#trash-count').textContent = list.length ? String(list.length) : '';
   $('#trash-empty').hidden = list.length > 0;
   $('#btn-trash-empty').hidden = !list.length;
   ul.hidden = !list.length;
@@ -2125,7 +2654,7 @@ async function loadTrash() {
         await loadTree();
         loadTrash();
         toast(`Restored ${t.folder ? 'folder' : ''} “${name}”${r.path !== t.path ? ` as ${r.path}` : ''}`,
-          t.folder ? undefined : { label: 'Open', run: () => { setDlg.close(); open(r.path); } });
+          t.folder ? undefined : { label: 'Open', run: () => { trashDlg.close(); open(r.path); } });
       } catch (e) { toast(e.message); }
     };
     li.querySelector('[data-act="forget"]').onclick = async () => {
@@ -2159,13 +2688,14 @@ function renderMe() {
     (S.me.sso ? ' People who sign in with SSO get an account automatically, unless the server is set up otherwise.' : '');
 }
 
-$('#btn-logout').onclick = async () => {
+async function signOut() {
   if (!confirm('Sign out of Tickmark on this device?')) return;
   await flushSave();
   try { await api('POST', '/api/auth/logout'); } catch {}
   await clearApiCache();
   location.replace('/');
-};
+}
+$('#btn-logout').onclick = () => signOut();
 
 $('#btn-change-password').onclick = async () => {
   const pw = $('#me-new').value;
@@ -2405,17 +2935,29 @@ function connectEvents() {
 const PID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 S.presence = { people: [], publicViewers: {} };
 const othersHere = () => (S.mode === 'note' && S.collab ? S.presence.people.filter((p) => p.path === S.path && p.id !== PID) : []);
-const cursorLine = () => el.editor.value.slice(0, el.editor.selectionStart).split('\n').length - 1;
-const reportPresence = debounce(async () => {
+/** The caret as line and column, which survive other people's edits better than an offset. */
+function cursorAt() {
+  const before = el.editor.value.slice(0, el.editor.selectionStart);
+  const nl = before.lastIndexOf('\n');
+  return { line: before.split('\n').length - 1, col: before.length - nl - 1 };
+}
+async function sendPresence() {
   const path = S.mode === 'note' ? S.path : null;
+  const at = path ? cursorAt() : { line: null, col: null };
+  if (path && path === sendPresence.path && at.line === sendPresence.line && at.col === sendPresence.col && Date.now() - sendPresence.at < 20000) return;
+  Object.assign(sendPresence, { path, ...at, at: Date.now() });
   try {
-    const r = await api('POST', '/api/presence', { id: PID, path, line: path ? cursorLine() : null });
+    const r = await api('POST', '/api/presence', { id: PID, path, ...at });
     if (S.collab !== r.allowed) { S.collab = r.allowed; renderPresence(); }
   } catch {}
-}, 600);
+}
+const slowPresence = debounce(sendPresence, 600), quickPresence = debounce(sendPresence, 150);
+// With someone else in the note, cursors move for them within a moment.
+const reportPresence = () => (othersHere().length ? quickPresence() : slowPresence());
 setInterval(() => { if (document.visibilityState === 'visible' && S.mode === 'note') reportPresence(); }, 25000);
 el.editor.addEventListener('keyup', () => reportPresence());
 el.editor.addEventListener('click', () => reportPresence());
+el.editor.addEventListener('input', () => reportPresence());
 addEventListener('pagehide', () => { fetch(`/api/presence?id=${enc(PID)}`, { method: 'DELETE', keepalive: true }).catch(() => {}); });
 const hue = (id) => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
 function renderPresence() {
@@ -2428,15 +2970,19 @@ function renderPresence() {
     return `<span class="pchip" style="--h:${hue(p.id)}" title="${esc(label)}">${esc((p.name || p.device || '?')[0].toUpperCase())}</span>`;
   }).join('') + (watching ? `<span class="pchip watch" title="${watching} ${watching === 1 ? 'person is' : 'people are'} viewing through the public link">👁 ${watching}</span>` : '');
   box.title = others.length ? 'Also editing this note: edits are shared within a second' : '';
+  renderCursors();
 }
 
 // ---------------------------------------------------------------- global shortcuts
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'F1') { e.preventDefault(); openPalette(); return; }
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
   const k = e.key.toLowerCase();
   if (k === 's') { e.preventDefault(); save(); }
+  else if (k === 'p' && e.shiftKey) { e.preventDefault(); openPalette(); }
   else if (k === 'p' || k === 'o') { e.preventDefault(); openSwitcher(); }
+  else if (k === '/' || k === '?') { e.preventDefault(); openKeys(); }
   else if (k === 'e') { e.preventDefault(); cycleView(); }
   else if (k === 'n' && !e.shiftKey) { e.preventDefault(); newNote(); }
   else if (k === '\\') { e.preventDefault(); toggleSidebar(); }

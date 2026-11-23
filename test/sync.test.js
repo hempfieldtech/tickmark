@@ -335,6 +335,29 @@ test('recurring tasks', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, async (
     assert.match(read('Inbox.md'), /- \[ \] Standup #task 🔁 every weekday 📅 2026-11-23 09:30 \^t/);
   });
 
+  await t.test('cancelling a recurring item in the note ends the series, once', async () => {
+    write('Home.md', read('Home.md').replace('- [ ] Water plants #task 🔁 every week', '- [-] Water plants #task 🔁 every week'));
+    await engine.run();
+    await engine.run();
+    const text = read('Home.md');
+    assert.equal(text.match(/Water plants/g).length, 3, 'no new copies'); // the open item + 2 history lines
+    assert.match(text, /^- \[-\] Water plants #task 📅 2026-12-08 \^t\w+$/m);
+    const w = await byTitle('Water plants');
+    assert.deepEqual([w.model.status, w.model.recur], ['cancelled', null]);
+    assert.doesNotMatch(w.ics, /RRULE/);
+  });
+
+  await t.test('cancelling a recurring todo in another app ends the series in the note', async () => {
+    const r = await byTitle('Pay rent');
+    await client.put(r.url, buildTodo({ existing: r.ics, uid: r.uid, model: { ...r.model, done: true, status: 'cancelled' } }), { etag: r.etag });
+    await engine.run();
+    await engine.run();
+    const text = read('Home.md');
+    assert.equal(text.match(/Pay rent/g).length, 2, 'no new copies');
+    assert.match(text, /^- \[-\] Pay rent #task 📅 2027-01-01 \^t\w+$/m);
+    assert.doesNotMatch((await byTitle('Pay rent')).ics, /RRULE/);
+  });
+
   await t.test('a finished series stays completed', async () => {
     write('Home.md', read('Home.md') + '- [ ] Course #task 🔁 every week until 2026-11-30 📅 2026-11-26\n');
     await engine.run();

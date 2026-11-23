@@ -186,11 +186,16 @@ test('config.json keeps CalDAV accounts encrypted when a cipher is on', async ()
   assert.match(fs.readFileSync(file, 'utf8'), /work\.example/);
 });
 
-test('a restored line goes at the end of its section', async () => {
+test('a restored line goes at the end of its heading\'s own content', async () => {
   const { insertInSection } = await import('../public/shared/tasks.js');
   const lines = ['# Home', '', '## Groceries #sync', '- [ ] Eggs', '', '### Dairy', '- [ ] Butter', '', '## Chores', '- [ ] Vacuum', ''];
-  assert.deepEqual(insertInSection(lines, 'Groceries', '- [ ] Milk').slice(2, 9),
-    ['## Groceries #sync', '- [ ] Eggs', '', '### Dairy', '- [ ] Butter', '- [ ] Milk', ''], 'after subsections, before the next same-level heading');
+  assert.deepEqual(insertInSection(lines, 'Groceries', '- [ ] Milk').slice(2, 8),
+    ['## Groceries #sync', '- [ ] Eggs', '- [ ] Milk', '', '### Dairy', '- [ ] Butter'], 'before its subsections');
+  assert.deepEqual(insertInSection(['# Page', '- [ ] a', '', '## New', '- [ ] b'], 'Page', '- [ ] c'),
+    ['# Page', '- [ ] a', '- [ ] c', '', '## New', '- [ ] b'], 'under the title, not the last ## of the note');
+  assert.deepEqual(insertInSection(['## A', '---', '- [ ] a', '', '---', '', '## B'], 'A', '- [ ] c'),
+    ['## A', '---', '- [ ] a', '- [ ] c', '', '---', '', '## B'], 'above a closing divider, below one under the heading');
+  assert.deepEqual(insertInSection(['## A', '---', '', '## B'], 'A', '- [ ] c'), ['## A', '---', '- [ ] c', '', '## B']);
   assert.deepEqual(insertInSection(lines, 'Chores', '- [ ] Dust').slice(-3), ['- [ ] Vacuum', '- [ ] Dust', '']);
   assert.equal(insertInSection(lines, 'Garden', '- [ ] Mow'), null);
   assert.ok(insertInSection(['# Home', '### groceries', '- [ ] Eggs'], 'Groceries', 'x'), 'level and case don\'t matter');
@@ -385,4 +390,11 @@ test('frontmatter: properties out and back without losing what it does not under
   assert.equal(writeFrontmatter('# Body\n', []), '# Body\n', 'no properties: no frontmatter');
   assert.equal(writeFrontmatter('x', [{ key: 'due', kind: 'text', value: '2026-12-01' }]), '---\ndue: 2026-12-01\n---\nx');
   assert.equal(parseFrontmatter('no frontmatter').has, false);
+});
+
+test('cancelling a recurring item drops its rule', async () => {
+  const { setTaskState } = await import('../public/shared/tasks.js');
+  assert.equal(setTaskState('- [ ] Bins #task 🔁 every week 📅 2026-12-01 ^tabc1234', 0, '-'), '- [-] Bins #task 📅 2026-12-01 ^tabc1234');
+  assert.equal(setTaskState('- [x] Bins 🔁 every day ✅ 2026-12-01', 0, '-'), '- [-] Bins');
+  assert.equal(setTaskState('- [ ] Bins 🔁 whenever', 0, '-'), '- [-] Bins 🔁 whenever', 'an unknown rule is just text');
 });
