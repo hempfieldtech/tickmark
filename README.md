@@ -247,6 +247,70 @@ Custom CSS can restyle anything, but the theme colours and fonts all come from t
 
 Useful selectors: `#editor` (the source editor), `.codeblock[data-family="py"]` (code blocks by language), `#preview` / `.md` (rendered notes), `#sidebar`, `#tree`, `.tag`, `.task-cb` (checkboxes), `.done-item`, `.cancelled-item`, `.progress-item`, `.due.overdue`.
 
+### Example CSS
+
+Paste any of these into Settings → Appearance → Custom CSS. They can be combined.
+
+A pink accent, rounder corners, a tinted sidebar, a serif preview and accent-coloured headings:
+
+```css
+:root {
+  --accent: #d6336c;
+  --accent-soft: color-mix(in srgb, #d6336c 15%, transparent);
+  --radius: 14px;
+}
+:root[data-theme="dark"] { --accent: #ff8fb8; }
+
+#sidebar { background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+#editor  { font-size: 15.5px; line-height: 1.8; }
+.md      { font-family: Georgia, "Iowan Old Style", serif; }
+.md h1, .md h2 { color: var(--accent); letter-spacing: -0.01em; }
+.md blockquote { border-left: 4px solid var(--accent); background: var(--accent-soft); border-radius: 0 var(--radius) var(--radius) 0; }
+.md li.done-item { opacity: .55; }
+.tag { border-radius: 999px; }
+```
+
+A bigger, more spaced-out editor for long writing:
+
+```css
+#editor { font-size: 17px; line-height: 1.9; }
+.md { font-size: 17px; line-height: 1.75; max-width: 46rem; }
+```
+
+Make overdue and finished items stand out more:
+
+```css
+.due.overdue { font-weight: 700; text-decoration: underline wavy; }
+.md li.done-item { opacity: .45; text-decoration: line-through; }
+.md li.cancelled-item { opacity: .35; }
+```
+
+A different font everywhere (it must be installed on the device):
+
+```css
+:root {
+  --sans: "Inter", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+```
+
+Change only the dark theme, leaving the others alone:
+
+```css
+:root[data-theme="dark"] {
+  --bg: #11141a;
+  --panel: #0c0f14;
+  --accent: #7cc4ff;
+}
+```
+
+Square, flat look:
+
+```css
+:root { --radius: 0; }
+.tag, .btn { border-radius: 0; }
+```
+
 | Key | |
 |---|---|
 | Ctrl+P / Ctrl+O | quick switcher (type a new name to create a note) |
