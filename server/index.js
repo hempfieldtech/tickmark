@@ -488,6 +488,21 @@ const routes = {
     if (ok) closePublic(ws, q.get('token'));
     return { ok };
   },
+  // Admins: everyone's links, by user, and stopping any of them.
+  'GET /api/shares/all': ({ user }) => {
+    admin(user);
+    const blocker = shareBlocker(oidc.publicUrl);
+    return { blocker, users: blocker ? [] : shares.byOwner().map((g) => ({ owner: g.owner, shares: g.shares.map(shareInfo) })) };
+  },
+  'DELETE /api/shares/all': ({ user }, q) => {
+    admin(user);
+    const s = shares.get(q.get('token'));
+    if (!s) return { ok: false };
+    const ok = shares.remove(s.owner, s.token);
+    const ws = MULTI ? workspaces.get(s.owner) : single;
+    if (ok && ws) closePublic(ws, s.token);
+    return { ok };
+  },
   // ---- the vault's .trash folder
   'GET /api/trash': ({ ws }) => ws.vault.listTrash(),
   'POST /api/trash/restore': ({ ws, user }, q, body) => ({ path: ws.vault.restoreTrash(String(body.name || '')) }),

@@ -1498,7 +1498,7 @@ function commands() {
     { id: 'trash', label: 'Trash…', run: () => openTrash() },
     { id: 'deleted-all', label: 'Deleted tasks (all notes)…', run: () => openSettings('deleted') },
     ...Object.entries(SECTIONS).filter(([k]) => sectionVisible(k)).map(([k, name]) => ({ id: 'set-' + k, label: `Settings: ${name}`, run: () => openSettings(k) })),
-    ...THEMES.map(([id, name]) => ({ id: 'theme-' + id, label: `Theme: ${name}`, run: () => { window.tickmarkTheme?.set(id); toast(`Theme: ${name}`); } })),
+    ...allThemes().map(([id, name]) => ({ id: 'theme-' + id, label: `Theme: ${name}`, run: () => { window.tickmarkTheme?.set(id); toast(`Theme: ${name}`); } })),
     { id: 'help', label: 'Help', run: () => openHelp() },
     { id: 'keys', label: 'Keybindings', hint: 'Ctrl+/', run: () => openKeys() },
     ...(isMulti() ? [{ id: 'sign-out', label: 'Sign out', run: () => signOut() }] : []),
@@ -1733,7 +1733,13 @@ function showSection(sec) {
   setDlg.querySelectorAll('.set-main > [data-sec]').forEach((x) => (x.hidden = x.dataset.sec !== sec));
   if (sec === 'users') loadUsers();
   if (sec === 'sso') loadSso();
-  if (sec === 'appearance') { renderThemes(); renderCssEditor(); renderBranding(); }
+  if (sec === 'appearance') {
+    renderThemes();
+    // The editor opens on the theme last edited, else the custom theme in use, else a new one.
+    const cur = window.tickmarkTheme?.get() || '';
+    if (!teDirty()) teLoad(teId ?? (cur.startsWith('my-') ? cur : null));
+    renderCssEditor(); renderBranding();
+  }
   if (sec === 'shares') loadShares();
   if (sec === 'deleted') loadDeleted('set');
   if (sec === 'templates') renderTemplates();
@@ -1799,11 +1805,13 @@ const THEMES = [
 ];
 const swatch = (t) => `<span class="sw" data-theme="${t}"><span class="sw-side"></span><span class="sw-main">` +
   `<span class="sw-line"></span><span class="sw-line short"></span><span class="sw-dot"></span></span></span>`;
+/** Built-in themes plus this user's own (Theme editor). */
+const allThemes = () => [...THEMES, ...(S.config?.customThemes || []).map((t) => [t.id, t.name, 'Your theme'])];
 function renderThemes() {
   const cur = window.tickmarkTheme?.get() || 'system';
-  $('#themes').innerHTML = THEMES.map(([id, name, hint]) =>
-    `<button type="button" role="radio" class="theme-opt" data-id="${id}" aria-checked="${id === cur}"${hint ? ` title="${esc(hint)}"` : ''}>` +
-    `<span class="sw-wrap">${id === 'system' ? swatch('light') + swatch('dark') : swatch(id)}</span>` +
+  $('#themes').innerHTML = allThemes().map(([id, name, hint]) =>
+    `<button type="button" role="radio" class="theme-opt" data-id="${esc(id)}" aria-checked="${id === cur}"${hint ? ` title="${esc(hint)}"` : ''}>` +
+    `<span class="sw-wrap">${id === 'system' ? swatch('light') + swatch('dark') : swatch(esc(id))}</span>` +
     `<span class="theme-name">${esc(name)}</span></button>`).join('');
 }
 $('#themes').addEventListener('click', (e) => {
@@ -1812,7 +1820,127 @@ $('#themes').addEventListener('click', (e) => {
   window.tickmarkTheme?.set(b.dataset.id);
   renderThemes();
   $(`#themes .theme-opt[data-id="${b.dataset.id}"]`)?.focus();
+  // Picking one of your own themes opens it in the editor.
+  if (b.dataset.id.startsWith('my-') && !teDirty()) { teLoad(b.dataset.id); }
 });
+
+// ---- Theme editor: colour pickers for a theme of your own, saved with your settings
+const TE_COLORS = [
+  ['bg', 'Background', 'Behind the note'], ['surface', 'Cards and editor', 'Dialogs, menus, inputs'],
+  ['panel', 'Sidebar', 'File tree and bars'], ['line', 'Borders', 'Lines between things'],
+  ['text', 'Text', 'Most writing'], ['muted', 'Quiet text', 'Hints and labels'],
+  ['accent', 'Accent', 'Buttons, links, ticks'], ['accentSoft', 'Accent background', 'Selected rows'],
+  ['mark', 'Highlight', '==Marked== text'], ['codeBg', 'Code background', 'Code and code blocks'],
+  ['warn', 'Warning', 'Due soon, warnings'], ['danger', 'Danger', 'Delete, errors'],
+];
+const TE_VARS = { accentSoft: 'accent-soft', codeBg: 'code-bg' };
+let teId = null;          // the custom theme being edited, or null for a new one
+let teSaved = null;       // what the editor showed when last loaded or saved, to tell if it changed
+const teDraft = () => {
+  const colors = {};
+  for (const [k] of TE_COLORS) colors[k] = $(`#te-c-${k}`).value;
+  return { id: teId, name: $('#te-name').value.trim(), dark: $('#te-dark').checked, colors };
+};
+const teDirty = () => teSaved !== null && JSON.stringify(teDraft()) !== teSaved;
+/** A theme's colours as #rrggbb, read from the stylesheet (built-in themes) or the saved theme. */
+function themeColors(id) {
+  const own = (S.config?.customThemes || []).find((t) => t.id === id);
+  if (own) return { colors: { ...own.colors }, dark: own.dark };
+  const probe = document.createElement('span');
+  probe.dataset.theme = id;
+  probe.hidden = true;
+  document.body.append(probe);
+  const cs = getComputedStyle(probe);
+  const ctx = document.createElement('canvas').getContext('2d');
+  const colors = {};
+  for (const [k] of TE_COLORS) {
+    ctx.fillStyle = '#000000';
+    ctx.fillStyle = cs.getPropertyValue('--' + (TE_VARS[k] || k)).trim() || '#000000';
+    colors[k] = /^#[0-9a-f]{6}$/i.test(ctx.fillStyle) ? ctx.fillStyle.toLowerCase() : '#000000';
+  }
+  const dark = cs.colorScheme === 'dark';
+  probe.remove();
+  return { colors, dark };
+}
+function teFill({ name, dark, colors }) {
+  $('#te-name').value = name;
+  $('#te-dark').checked = !!dark;
+  for (const [k] of TE_COLORS) $(`#te-c-${k}`).value = colors[k];
+  tePreview();
+}
+function tePreview() {
+  window.tickmarkThemes?.apply(S.config?.customThemes || [], { save: false, draft: teDraft() });
+  const dirty = teDirty();
+  $('#te-state').textContent = dirty ? 'Not saved yet' : '';
+  $('#te-save').disabled = teId !== null && !dirty;
+  $('#te-delete').hidden = teId === null;
+}
+/** Open a saved theme (id) or start a new one from the current theme. */
+function teLoad(id) {
+  const own = (S.config?.customThemes || []).find((t) => t.id === id);
+  teId = own ? own.id : null;
+  const cur = window.tickmarkTheme?.get() || 'system';
+  const base = own ? id : cur === 'system' ? document.documentElement.dataset.theme : cur;
+  teFill({ name: own ? own.name : '', ...themeColors(base) });
+  teSaved = JSON.stringify(teDraft());
+  renderThemeEditor();
+}
+function renderThemeEditor() {
+  const own = S.config?.customThemes || [];
+  $('#te-pick').innerHTML = '<option value="">New theme</option>' + own.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+  $('#te-pick').value = teId || '';
+  $('#te-base').innerHTML = '<option value="">Choose…</option>' + allThemes().filter(([id]) => id !== 'system')
+    .map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('');
+  tePreview();
+}
+$('#te-colors').innerHTML = TE_COLORS.map(([k, label, hint]) =>
+  `<label class="te-color"><input type="color" id="te-c-${k}"><span>${esc(label)}<small>${esc(hint)}</small></span></label>`).join('');
+$('#theme-editor').addEventListener('input', tePreview);
+$('#te-pick').onchange = (e) => {
+  if (teDirty() && !confirm('Discard the changes to this theme?')) { e.target.value = teId || ''; return; }
+  teLoad(e.target.value || null);
+};
+$('#te-base').onchange = (e) => {
+  if (!e.target.value) return;
+  const { colors, dark } = themeColors(e.target.value);
+  teFill({ name: $('#te-name').value, dark, colors });
+  e.target.value = '';
+};
+$('#te-save').onclick = async () => {
+  const d = teDraft();
+  if (!d.name) { $('#te-name').focus(); toast('Give the theme a name'); return; }
+  const list = [...(S.config?.customThemes || [])];
+  if (!teId) {
+    const rnd = crypto.getRandomValues(new Uint8Array(5));
+    d.id = 'my-' + [...rnd].map((b) => b.toString(16).padStart(2, '0')).join('');
+    list.push(d);
+  } else list[list.findIndex((t) => t.id === teId)] = d;
+  try {
+    S.config = await api('PUT', '/api/config', { customThemes: list });
+    store.set('config', S.config);
+    teId = d.id;
+    teSaved = JSON.stringify(teDraft());
+    window.tickmarkThemes?.apply(S.config.customThemes);
+    window.tickmarkTheme?.set(d.id);
+    renderThemes();
+    renderThemeEditor();
+    $('#te-state').textContent = 'Saved';
+  } catch (e) { toast(e.message); }
+};
+$('#te-delete').onclick = async () => {
+  const t = (S.config?.customThemes || []).find((x) => x.id === teId);
+  if (!t || !confirm(`Delete the theme “${t.name}”? Devices using it go back to System.`)) return;
+  try {
+    S.config = await api('PUT', '/api/config', { customThemes: S.config.customThemes.filter((x) => x.id !== t.id) });
+    store.set('config', S.config);
+    window.tickmarkThemes?.apply(S.config.customThemes);
+    if (window.tickmarkTheme?.get() === t.id) window.tickmarkTheme.set('system');
+    renderThemes();
+    teLoad(null);
+  } catch (e) { toast(e.message); }
+};
+/** Your saved themes, applied (and cached on this device) whenever your settings arrive. */
+function applyCustomThemes() { window.tickmarkThemes?.apply(S.config?.customThemes || []); }
 
 // ---- Help (the ? menu): the README, with its contents as a tree on the left
 const helpDlg = $('#dlg-help');
@@ -2302,6 +2430,20 @@ $('#btn-share-stop').onclick = async () => {
   try { await api('DELETE', `/api/shares?token=${enc(shareState.share.token)}`); shareState.share = null; renderShare(); loadShareIndex(); toast('No longer shared'); } catch (e) { toast(e.message); }
 };
 
+/** One public link as a Settings row: what it shares, its URL, Copy and Stop. */
+function shareRow(sh, onStop) {
+  const li = document.createElement('li');
+  const label = sh.kind === 'folder' ? `📁 ${sh.path}` : basename(sh.path) + (dirname(sh.path) ? ` (${dirname(sh.path)})` : '');
+  li.innerHTML = `<span class="who"><b>${esc(label)}</b>${sh.edit ? '<span class="badge">can edit</span>' : ''}<span class="shares-list-url">${esc(sh.url)}</span></span>` +
+    `<button type="button" class="btn" data-act="copy">Copy</button><button type="button" class="btn danger" data-act="stop">Stop</button>`;
+  li.querySelector('[data-act="copy"]').onclick = async () => { try { await navigator.clipboard.writeText(sh.url); toast('Link copied'); } catch { toast(sh.url); } };
+  li.querySelector('[data-act="stop"]').onclick = async () => {
+    if (!confirm(`Stop sharing “${label}”? The link stops working.`)) return;
+    try { await onStop(); } catch (e) { toast(e.message); }
+  };
+  return li;
+}
+
 async function loadShares() {
   const ul = $('#shares-list');
   let r;
@@ -2312,16 +2454,31 @@ async function loadShares() {
   ul.hidden = !r.shares.length;
   ul.innerHTML = '';
   for (const sh of r.shares) {
-    const li = document.createElement('li');
-    const label = sh.kind === 'folder' ? `📁 ${sh.path}` : basename(sh.path) + (dirname(sh.path) ? ` (${dirname(sh.path)})` : '');
-    li.innerHTML = `<span class="who"><b>${esc(label)}</b>${sh.edit ? '<span class="badge">can edit</span>' : ''}<span class="shares-list-url">${esc(sh.url)}</span></span>` +
-      `<button type="button" class="btn" data-act="copy">Copy</button><button type="button" class="btn danger" data-act="stop">Stop</button>`;
-    li.querySelector('[data-act="copy"]').onclick = async () => { try { await navigator.clipboard.writeText(sh.url); toast('Link copied'); } catch { toast(sh.url); } };
-    li.querySelector('[data-act="stop"]').onclick = async () => {
-      if (!confirm(`Stop sharing “${label}”? The link stops working.`)) return;
-      try { await api('DELETE', `/api/shares?token=${enc(sh.token)}`); loadShares(); loadShareIndex(); } catch (e) { toast(e.message); }
-    };
-    ul.append(li);
+    ul.append(shareRow(sh, async () => { await api('DELETE', `/api/shares?token=${enc(sh.token)}`); loadShares(); loadShareIndex(); }));
+  }
+  loadAllShares(!!r.blocker);
+}
+
+/** Admins: every user's links, one list per user. */
+async function loadAllShares(blocked) {
+  const box = $('#shares-all');
+  box.hidden = !isAdmin() || blocked;
+  if (box.hidden) return;
+  const groups = $('#shares-all-groups');
+  let r;
+  try { r = await api('GET', '/api/shares/all'); } catch (e) { groups.innerHTML = `<p class="note err">${esc(e.message)}</p>`; return; }
+  groups.innerHTML = '';
+  $('#shares-all-empty').hidden = r.users.length > 0;
+  for (const g of r.users) {
+    const h = document.createElement('h5');
+    h.className = 'shares-owner';
+    h.textContent = g.owner === S.me.user.name ? `${g.owner} (you)` : g.owner;
+    const ul = document.createElement('ul');
+    ul.className = 'users';
+    for (const sh of g.shares) {
+      ul.append(shareRow(sh, async () => { await api('DELETE', `/api/shares/all?token=${enc(sh.token)}`); loadShares(); loadShareIndex(); }));
+    }
+    groups.append(h, ul);
   }
 }
 
@@ -2422,7 +2579,11 @@ $('#btn-css-save').onclick = async () => {
 };
 $('#btn-css-revert').onclick = () => { cssBox.value = savedCss(); applyCustomCss(); cssState(); };
 // Leaving Settings with unsaved CSS puts the saved styles back.
-setDlg.addEventListener('close', () => { if (cssBox.value !== savedCss()) { cssBox.value = savedCss(); applyCustomCss(); } });
+setDlg.addEventListener('close', () => {
+  if (cssBox.value !== savedCss()) { cssBox.value = savedCss(); applyCustomCss(); }
+  teSaved = null; // an unsaved theme is dropped; the editor reloads next time
+  applyCustomThemes();
+});
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2991,7 +3152,7 @@ async function boot() {
     S.openFolders = new Set(store.get('openFolders', []));
   }
   try { S.config = await api('GET', '/api/config'); store.set('config', S.config); } catch {}
-  if (S.config) applyCustomCss();
+  if (S.config) { applyCustomCss(); applyCustomThemes(); }
   try { S.sync = await api('GET', '/api/sync'); } catch {}
   await loadTree();
   connectEvents();

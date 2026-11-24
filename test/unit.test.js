@@ -322,6 +322,21 @@ test('settings keep custom CSS and the move-completed switch', async () => {
   assert.throws(() => c.update({ customCss: 'x'.repeat(100_001) }), /100 KB/);
 });
 
+test('custom themes are checked before they are saved', async () => {
+  const { Config } = await import('../server/config.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tickmark-cfg-'));
+  const c = new Config(dir);
+  assert.deepEqual(c.get().customThemes, []);
+  const colors = Object.fromEntries(['bg', 'panel', 'surface', 'line', 'text', 'muted', 'accent', 'accentSoft', 'danger', 'warn', 'mark', 'codeBg'].map((k) => [k, '#AABBCC']));
+  c.update({ customThemes: [{ id: 'my-abc123', name: '  Ocean  ', dark: true, colors, extra: 'x' }] });
+  assert.deepEqual(new Config(dir).get().customThemes, [{ id: 'my-abc123', name: 'Ocean', dark: true, colors: Object.fromEntries(Object.keys(colors).map((k) => [k, '#aabbcc'])) }]);
+  assert.throws(() => c.update({ customThemes: [{ id: 'my-abc123', name: 'x', colors: { ...colors, bg: 'red; } body { display:none' } }] }), /bad colour/);
+  assert.throws(() => c.update({ customThemes: [{ id: '"] { x', name: 'x', colors }] }), /bad id/);
+  assert.throws(() => c.update({ customThemes: [{ id: 'my-abcd', colors }, { id: 'my-abcd', colors }] }), /bad id/);
+  assert.throws(() => c.update({ customThemes: Array.from({ length: 31 }, (_, i) => ({ id: 'my-t' + String(i).padStart(3, '0'), colors })) }), /30 themes/);
+  assert.equal(new Config(dir).get().customThemes[0].name, 'Ocean', 'a refused update changes nothing');
+});
+
 test('an empty checkbox is not synced (and gets no block id) until it has text', () => {
   const text = '## Groceries #sync\n- [ ] \n- [ ]\n- [ ] #task\n- [ ] Milk\n';
   assert.deepEqual(parseTasks(text, opts).map((t) => [t.title, t.synced]), [['', false], ['', false], ['', false], ['Milk', true]]);

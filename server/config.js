@@ -18,7 +18,31 @@ const DEFAULTS = {
   moveCompleted: true,
   // Your own CSS, applied on top of the theme on every device you use.
   customCss: '',
+  // Themes made in Settings → Appearance → Theme editor: [{ id, name, dark, colors: { bg, panel, … } }].
+  customThemes: [],
 };
+
+export const THEME_COLORS = ['bg', 'panel', 'surface', 'line', 'text', 'muted', 'accent', 'accentSoft', 'danger', 'warn', 'mark', 'codeBg'];
+const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
+/** Check and tidy the custom themes a client sent; anything odd is refused rather than stored. */
+export function cleanThemes(list) {
+  if (!Array.isArray(list)) throw bad('Themes must be a list');
+  if (list.length > 30) throw bad('You can keep up to 30 themes');
+  const ids = new Set();
+  return list.map((t) => {
+    const id = String(t?.id || '');
+    if (!/^my-[a-z0-9]{4,16}$/.test(id) || ids.has(id)) throw bad('A theme has a bad id');
+    ids.add(id);
+    const name = String(t.name || '').trim().slice(0, 40) || 'My theme';
+    const colors = {};
+    for (const k of THEME_COLORS) {
+      const c = String(t.colors?.[k] || '').toLowerCase();
+      if (!/^#[0-9a-f]{6}$/.test(c)) throw bad(`“${name}” has a bad colour for ${k}`);
+      colors[k] = c;
+    }
+    return { id, name, dark: t.dark === true, colors };
+  });
+}
 
 const tagList = (v) => [...new Set((typeof v === 'string' ? v.split(/[,\s]+/) : v || [])
   .map((t) => String(t).replace(/^#/, '').trim().toLowerCase()).filter(Boolean))];
@@ -135,6 +159,7 @@ export class Config {
       if (css.length > 100_000) throw Object.assign(new Error('Custom CSS is limited to 100 KB'), { status: 400 });
       next.customCss = css;
     }
+    if (patch.customThemes !== undefined) next.customThemes = cleanThemes(patch.customThemes);
     if (patch.moveCompleted !== undefined) next.moveCompleted = patch.moveCompleted === true || patch.moveCompleted === 'true';
     this.data = next;
     this.write();

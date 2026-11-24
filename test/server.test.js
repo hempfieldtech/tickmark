@@ -871,3 +871,29 @@ test('removing a public link, or making it read-only, ends its open live pages',
     assert.equal(await Promise.race([done, new Promise((r) => setTimeout(() => r(false), 2000))]), true, 'removed: stream ended');
   } finally { await srv.stop(); }
 });
+
+test("admins see everyone's public links by user, and can stop any of them", async () => {
+  const dir = tmp();
+  const data = path.join(dir, 'data');
+  addUser(data, 'alex', 'alex password', '--admin');
+  addUser(data, 'bob', 'bobs password');
+  const srv = await startServer({ TICKMARK_DATA: data, TICKMARK_VAULT: path.join(dir, 'vault'), TICKMARK_PUBLIC_URL: 'https://notes.example.com' });
+  try {
+    const bob = client(srv.base), alex = client(srv.base);
+    await bob.call('POST', '/api/auth/login', { username: 'bob', password: 'bobs password' });
+    await alex.call('POST', '/api/auth/login', { username: 'alex', password: 'alex password' });
+    await bob.call('POST', '/api/file', { path: 'Bob.md', content: 'b\n' });
+    await alex.call('POST', '/api/file', { path: 'Alex.md', content: 'a\n' });
+    const bs = (await bob.call('POST', '/api/shares', { path: 'Bob.md' })).data;
+    await alex.call('POST', '/api/shares', { path: 'Alex.md' });
+    assert.equal((await bob.call('GET', '/api/shares/all')).status, 403, 'not for regular users');
+    assert.equal((await bob.call('DELETE', `/api/shares/all?token=${bs.token}`)).status, 403);
+    const all = (await alex.call('GET', '/api/shares/all')).data;
+    assert.deepEqual(all.users.map((g) => [g.owner, g.shares.map((s) => s.path)]), [['alex', ['Alex.md']], ['bob', ['Bob.md']]]);
+    assert.match(all.users[1].shares[0].url, /^https:\/\/notes\.example\.com\/s\//);
+    assert.equal(all.users[1].shares[0].owner, undefined, 'owner is the group, not repeated');
+    assert.equal((await alex.call('DELETE', `/api/shares/all?token=${bs.token}`)).data.ok, true);
+    assert.deepEqual((await bob.call('GET', '/api/shares')).data.shares, [], "bob's link is gone");
+    assert.equal((await alex.call('GET', `/api/public/${bs.token}`)).status, 404);
+  } finally { await srv.stop(); }
+});

@@ -44,6 +44,17 @@ export class Shares {
       .sort((a, b) => a.path.localeCompare(b.path));
   }
 
+  /** Every link on the server, grouped by owner (for admins). */
+  byOwner() {
+    const out = new Map();
+    for (const [token, s] of Object.entries(this.data)) {
+      if (!out.has(s.owner)) out.set(s.owner, []);
+      out.get(s.owner).push({ token, ...s });
+    }
+    return [...out].map(([owner, list]) => ({ owner, shares: list.sort((a, b) => a.path.localeCompare(b.path)) }))
+      .sort((a, b) => String(a.owner).localeCompare(String(b.owner)));
+  }
+
   /** Share a note or folder; sharing the same thing again returns the existing link. */
   create(owner, rel, kind) {
     const existing = this.list(owner).find((s) => s.path === rel && s.kind === kind);

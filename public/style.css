@@ -415,6 +415,7 @@ details.card[open] summary { margin-bottom: 4px; }
 .users { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 6px; }
 .users li { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 10px; }
 .users li + li { border-top: 1px solid var(--line); }
+.shares-owner { margin: 14px 0 6px; font-size: 13px; }
 .users li .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .deleted li { align-items: flex-start; padding: 8px 6px 8px 12px; }
 .deleted .what { flex: 1; min-width: 0; display: grid; gap: 2px; }
@@ -490,6 +491,36 @@ details.card[open] summary { margin-bottom: 4px; }
 .sw-line.short { width: 60%; background: var(--muted); }
 .sw-dot { position: absolute; right: 10px; bottom: 10px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); }
 .sw[data-theme="terminal"] { background: repeating-linear-gradient(to bottom, var(--bg) 0 2px, #000 2px 3px); }
+
+/* Theme editor (Settings → Appearance) */
+.theme-editor { margin-top: 16px; display: grid; gap: 10px; }
+.theme-editor h4 { margin: 0; }
+.theme-editor .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.theme-editor .row label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.te-del { margin-left: auto; }
+.te-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 760px) { .te-grid { grid-template-columns: 1fr; } }
+.te-fields { display: grid; gap: 8px; }
+.te-fields > label:not(.check) { display: grid; gap: 4px; }
+.te-colors { display: grid; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 8px 10px; }
+.dlg label.te-color { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.dlg .te-color input[type="color"] { width: 34px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; flex: none; }
+.te-color span { display: grid; line-height: 1.2; color: var(--text); }
+.te-color small { color: var(--muted); font-size: 11px; }
+.te-preview { display: grid; gap: 4px; position: sticky; top: 0; }
+.te-sample { display: flex; min-height: 170px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; }
+.te-s-side { width: 32%; background: var(--panel); border-right: 1px solid var(--line); display: grid; align-content: start; gap: 4px; padding: 10px 8px; color: var(--muted); }
+.te-s-side b { color: var(--text); }
+.te-s-side .on { background: var(--accent-soft); color: var(--text); border-radius: 4px; padding: 0 4px; }
+.te-s-main { flex: 1; display: grid; align-content: start; gap: 8px; padding: 10px; background: var(--surface); }
+.te-s-muted { color: var(--muted); }
+.te-s-link { color: var(--accent); text-decoration: underline; }
+.te-s-hl { background: var(--mark); justify-self: start; padding: 0 3px; border-radius: 3px; }
+.te-s-main code { background: var(--code-bg); justify-self: start; padding: 1px 5px; border-radius: 4px; font-family: var(--mono); }
+.te-s-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.te-s-btn { background: var(--accent); color: var(--surface); border-radius: 5px; padding: 2px 8px; }
+.te-s-warn { color: var(--warn); border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; }
+.te-s-danger { color: var(--danger); border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; }
 
 /* Deleted tasks: scoped to one note */
 .deleted-dlg .scope { margin: 0; font-size: 13px; color: var(--muted); }
