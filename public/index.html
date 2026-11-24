@@ -23,13 +23,21 @@
       <div class="search-wrap">
         <input id="search" type="search" placeholder="Search notes" autocomplete="off" spellcheck="false">
       </div>
-      <div class="tree-tools">
-        <button class="icon-btn" id="btn-new" title="New note (Ctrl+N)" aria-label="New note">
-          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
-        <button class="icon-btn" id="btn-new-folder" title="New folder" aria-label="New folder">
-          <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/></svg></button>
+      <div id="tree-pane" class="tree-pane">
+        <div class="vault-head" id="vault-head">
+          <button type="button" class="vault-toggle" id="vault-toggle" aria-expanded="true" title="Show or hide the notes">
+            <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><span class="name">Vault</span></button>
+          <span class="vault-tools">
+            <button class="icon-btn" id="btn-new" title="New note (Ctrl+N)" aria-label="New note">
+              <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 11v6M9 14h6"/></svg></button>
+            <button class="icon-btn" id="btn-new-folder" title="New folder" aria-label="New folder">
+              <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/></svg></button>
+            <button class="icon-btn" id="btn-collapse-all" title="Collapse folders" aria-label="Collapse folders">
+              <svg viewBox="0 0 24 24"><path d="M8 4h11a1 1 0 0 1 1 1v11"/><rect x="4" y="8" width="12" height="12" rx="1"/><path d="M7.5 14h5"/></svg></button>
+          </span>
+        </div>
+        <div id="tree" role="tree"></div>
       </div>
-      <div id="tree" role="tree"></div>
       <div id="search-results" hidden></div>
       <div class="side-foot">
         <button id="btn-trash" class="side-link" title="Notes and folders you moved to the trash">

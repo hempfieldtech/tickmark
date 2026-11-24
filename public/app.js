@@ -41,7 +41,7 @@ async function api(method, url, body) {
 }
 
 const el = {
-  app: $('#app'), tree: $('#tree'), results: $('#search-results'), search: $('#search'),
+  app: $('#app'), tree: $('#tree'), treePane: $('#tree-pane'), results: $('#search-results'), search: $('#search'),
   editor: $('#editor'), preview: $('#preview'), previewWrap: $('#preview-wrap'), backlinks: $('#backlinks'), wordCount: $('#word-count'),
   empty: $('#empty'), title: $('#title'), crumbs: $('#crumbs'), saveState: $('#save-state'),
   sync: $('#btn-sync'), menu: $('#menu'), toast: $('#toast'),
@@ -992,6 +992,8 @@ async function open(path, { line = null, push = true, find = null } = {}) {
     const lh = parseFloat(getComputedStyle(el.editor).lineHeight) || 24;
     el.editor.scrollTop = Math.max(0, line * lh - el.editor.clientHeight / 3);
   } else {
+    // Start at the top: a new value leaves the caret at the end, and focusing would scroll down to it.
+    el.editor.setSelectionRange(0, 0);
     el.editor.scrollTop = 0;
     el.previewWrap.scrollTop = 0;
   }
@@ -1199,7 +1201,7 @@ function renderTree() {
     }
     return out;
   };
-  el.tree.innerHTML = html(buildTree()) || '<p class="note" style="padding:8px">No notes yet. Click + to create one.</p>';
+  el.tree.innerHTML = html(buildTree()) || '<p class="note" style="padding:8px">No notes yet. Use the new note button on the Vault row to create one.</p>';
 }
 
 el.tree.addEventListener('click', (e) => {
@@ -1332,8 +1334,17 @@ async function newFolder(parent = '') {
     await loadTree();
   } catch (e) { toast(e.message); }
 }
-$('#btn-new').onclick = () => newNote();
-$('#btn-new-folder').onclick = () => newFolder(S.path ? dirname(S.path) : '');
+$('#btn-new').onclick = () => { setVaultOpen(true); newNote(); };
+$('#btn-new-folder').onclick = () => { setVaultOpen(true); newFolder(S.path ? dirname(S.path) : ''); };
+// The "Vault" row: shows or hides the whole tree (remembered on this device); the last button closes every folder.
+function setVaultOpen(open) {
+  el.treePane.classList.toggle('collapsed', !open);
+  $('#vault-toggle').setAttribute('aria-expanded', String(open));
+  store.set('vaultOpen', open);
+}
+$('#vault-toggle').onclick = () => setVaultOpen(el.treePane.classList.contains('collapsed'));
+$('#btn-collapse-all').onclick = () => { S.openFolders.clear(); store.set('openFolders', []); renderTree(); };
+setVaultOpen(store.get('vaultOpen', true) !== false);
 
 // rename via the title field
 async function commitTitle() {
@@ -1370,7 +1381,7 @@ $('#btn-help').onclick = (e) => showMenu(e.currentTarget, [
 // ---------------------------------------------------------------- search
 const runSearch = debounce(async () => {
   const q = el.search.value.trim();
-  if (!q) { el.results.hidden = true; el.tree.hidden = false; return; }
+  if (!q) { el.results.hidden = true; el.treePane.hidden = false; return; }
   const ql = q.toLowerCase();
   const byName = S.files.filter((f) => !isTemplate(f.path) && f.path.toLowerCase().includes(ql)).slice(0, 10);
   let byText = [];
@@ -1384,7 +1395,7 @@ const runSearch = debounce(async () => {
     ? items.map((r) => `<div class="sr-item" data-path="${esc(r.path)}"><div class="p">${esc(basename(r.path))}</div><div class="s">${r.snippet}</div></div>`).join('')
     : '<p class="note" style="padding:8px">No matches</p>';
   el.results.hidden = false;
-  el.tree.hidden = true;
+  el.treePane.hidden = true;
 }, 150);
 el.search.addEventListener('input', runSearch);
 el.search.addEventListener('keydown', (e) => {
@@ -1516,7 +1527,7 @@ function revealInTree(path) {
   const parts = dirname(path).split('/').filter(Boolean);
   parts.forEach((_, i) => S.openFolders.add(parts.slice(0, i + 1).join('/')));
   store.set('openFolders', [...S.openFolders]);
-  el.search.value = ''; el.results.hidden = true; el.tree.hidden = false;
+  el.search.value = ''; el.results.hidden = true; el.treePane.hidden = false;
   renderTree();
   if (mobile.matches) el.app.classList.add('sidebar-open');
   else if (el.app.classList.contains('no-sidebar')) toggleSidebar();
