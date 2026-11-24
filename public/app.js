@@ -2715,6 +2715,11 @@ function cssState(msg) {
   const dirty = cssBox.value !== savedCss();
   $('#btn-css-save').disabled = !dirty;
   $('#btn-css-revert').disabled = !dirty;
+  // Make a theme from it… needs theme colours in the CSS to work with.
+  const hasVars = Object.keys(cssThemeVars(cssBox.value)).length > 0;
+  $('#btn-css-theme').disabled = !hasVars;
+  $('#btn-css-theme').title = hasVars ? 'Turn the colours set here into a theme you can pick'
+    : cssBox.value.trim() ? 'Your CSS sets no theme colours (like --accent or --bg on :root)' : 'Add custom CSS with theme colours first';
   $('#css-state').textContent = msg || (window.tickmarkCss?.disabled ? 'Not applied: the page was opened with ?nocss' : dirty ? 'Not saved yet' : '');
 }
 cssBox.addEventListener('input', debounce(() => { window.tickmarkCss?.apply(cssBox.value, { save: false }); cssState(); }, 200));
