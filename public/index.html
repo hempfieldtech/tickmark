@@ -163,35 +163,6 @@
         <section data-sec="appearance" class="set-body">
           <p class="note">Theme for this device. It applies straight away.</p>
           <div id="themes" class="themes" role="radiogroup" aria-label="Theme"></div>
-          <div class="card theme-editor" id="theme-editor">
-            <h4>Theme editor</h4>
-            <p class="note">Make your own theme by picking colours; no CSS needed. Your themes follow you to every device you sign in on and show up in the list above.</p>
-            <div class="row">
-              <label>Edit <select id="te-pick"></select></label>
-              <label>Start from <select id="te-base"></select></label>
-            </div>
-            <div class="te-grid">
-              <div class="te-fields">
-                <label>Name <input id="te-name" maxlength="40" placeholder="My theme" autocomplete="off"></label>
-                <label class="check"><input type="checkbox" id="te-dark"> Dark theme <span class="note">(dark scrollbars and form controls)</span></label>
-                <div id="te-colors" class="te-colors"></div>
-              </div>
-              <div class="te-preview" aria-hidden="true">
-                <span class="note">Preview</span>
-                <span class="te-sample" data-theme="__draft">
-                  <span class="te-s-side"><b>Notes</b><span>Inbox</span><span class="on">Ideas</span></span>
-                  <span class="te-s-main"><b>Heading</b><span>Some text, with <span class="te-s-muted">quieter text</span> and a <span class="te-s-link">link</span>.</span>
-                    <span class="te-s-hl">highlighted</span><code>code</code>
-                    <span class="te-s-row"><span class="te-s-btn">Button</span><span class="te-s-warn">Warning</span><span class="te-s-danger">Delete</span></span></span>
-                </span>
-              </div>
-            </div>
-            <div class="row">
-              <button type="button" id="te-save" class="btn primary">Save and use</button>
-              <span class="note" id="te-state"></span>
-              <button type="button" id="te-delete" class="btn danger te-del">Delete theme</button>
-            </div>
-          </div>
           <div class="card css-card">
             <h4>Custom CSS</h4>
             <p class="note">Your own styles, on top of the theme, on every device you sign in on. Changes show as you type; Save keeps them.
@@ -201,6 +172,7 @@
             <div class="row">
               <button type="button" id="btn-css-save" class="btn primary">Save</button>
               <button type="button" id="btn-css-revert" class="btn">Undo changes</button>
+              <button type="button" id="btn-css-theme" class="btn" title="Turn the colours set here into a theme you can pick">Make a theme from it…</button>
               <span class="note" id="css-state"></span>
             </div>
           </div>
@@ -495,6 +467,42 @@
     </div>
   </dialog>
 
+  <dialog id="dlg-theme" class="dlg theme-dlg" aria-labelledby="te-title">
+    <header class="set-head">
+      <h3 id="te-title">Custom theme</h3>
+      <button type="button" class="icon-btn" data-close aria-label="Close" title="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="set-body te-body">
+      <p class="note" id="te-intro">Pick colours and watch the app change as you go. Nothing is kept until you save; Cancel puts everything back.</p>
+      <div class="te-top">
+        <label>Name <input id="te-name" maxlength="40" placeholder="My theme" autocomplete="off"></label>
+        <label>Start from <select id="te-base"></select></label>
+        <div class="te-mode" role="radiogroup" aria-label="Light or dark">
+          <span class="te-mode-label">Style</span>
+          <div class="seg"><button type="button" role="radio" data-mode="light">☀ Light</button><button type="button" role="radio" data-mode="dark">☾ Dark</button></div>
+        </div>
+      </div>
+      <div class="te-grid">
+        <div id="te-colors" class="te-colors"></div>
+        <div class="te-preview" aria-hidden="true">
+          <span class="te-sample" data-theme="__draft">
+            <span class="te-s-side"><b>Notes</b><span>Inbox</span><span class="on">Ideas</span><span>Trips</span></span>
+            <span class="te-s-main"><b>Heading</b><span>Some text, with <span class="te-s-muted">quieter text</span> and a <span class="te-s-link">link</span>.</span>
+              <span class="te-s-hl">highlighted</span><code>code</code>
+              <span class="te-s-row"><span class="te-s-btn">Button</span><span class="te-s-warn">Due soon</span><span class="te-s-danger">Delete</span></span></span>
+          </span>
+          <ul class="te-checks" id="te-checks"></ul>
+        </div>
+      </div>
+    </div>
+    <footer class="te-foot">
+      <button type="button" id="te-delete" class="btn danger">Delete theme</button>
+      <span class="note" id="te-state"></span>
+      <button type="button" class="btn" id="te-cancel">Cancel</button>
+      <button type="button" id="te-save" class="btn primary">Save and use</button>
+    </footer>
+  </dialog>
   <dialog id="dlg-share" class="dlg small share-dlg" aria-labelledby="share-title">
     <header class="set-head">
       <h3 id="share-title">Share</h3>

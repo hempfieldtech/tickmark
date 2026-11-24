@@ -1734,11 +1734,7 @@ function showSection(sec) {
   if (sec === 'users') loadUsers();
   if (sec === 'sso') loadSso();
   if (sec === 'appearance') {
-    renderThemes();
-    // The editor opens on the theme last edited, else the custom theme in use, else a new one.
-    const cur = window.tickmarkTheme?.get() || '';
-    if (!teDirty()) teLoad(teId ?? (cur.startsWith('my-') ? cur : null));
-    renderCssEditor(); renderBranding();
+    renderThemes(); renderCssEditor(); renderBranding();
   }
   if (sec === 'shares') loadShares();
   if (sec === 'deleted') loadDeleted('set');
@@ -1805,142 +1801,244 @@ const THEMES = [
 ];
 const swatch = (t) => `<span class="sw" data-theme="${t}"><span class="sw-side"></span><span class="sw-main">` +
   `<span class="sw-line"></span><span class="sw-line short"></span><span class="sw-dot"></span></span></span>`;
-/** Built-in themes plus this user's own (Theme editor). */
+/** Built-in themes plus this user's own (made with Custom theme). */
 const allThemes = () => [...THEMES, ...(S.config?.customThemes || []).map((t) => [t.id, t.name, 'Your theme'])];
 function renderThemes() {
   const cur = window.tickmarkTheme?.get() || 'system';
   $('#themes').innerHTML = allThemes().map(([id, name, hint]) =>
     `<button type="button" role="radio" class="theme-opt" data-id="${esc(id)}" aria-checked="${id === cur}"${hint ? ` title="${esc(hint)}"` : ''}>` +
     `<span class="sw-wrap">${id === 'system' ? swatch('light') + swatch('dark') : swatch(esc(id))}</span>` +
-    `<span class="theme-name">${esc(name)}</span></button>`).join('');
+    `<span class="theme-name">${esc(name)}</span>` +
+    (id.startsWith('my-') ? `<span class="te-edit" role="button" tabindex="0" data-edit="${esc(id)}" title="Edit “${esc(name)}”" aria-label="Edit ${esc(name)}">✎</span>` : '') +
+    `</button>`).join('') +
+    `<button type="button" class="theme-opt" data-new title="Make a theme of your own by picking colours">` +
+    `<span class="sw-wrap"><span class="sw-new"><b>+</b>Make your own</span></span><span class="theme-name">Custom theme</span></button>`;
 }
 $('#themes').addEventListener('click', (e) => {
+  const edit = e.target.closest('[data-edit]');
+  if (edit) { e.stopPropagation(); openThemeEditor(edit.dataset.edit); return; }
   const b = e.target.closest('.theme-opt');
   if (!b) return;
+  if (b.hasAttribute('data-new')) { openThemeEditor(null); return; }
   window.tickmarkTheme?.set(b.dataset.id);
   renderThemes();
   $(`#themes .theme-opt[data-id="${b.dataset.id}"]`)?.focus();
-  // Picking one of your own themes opens it in the editor.
-  if (b.dataset.id.startsWith('my-') && !teDirty()) { teLoad(b.dataset.id); }
+});
+$('#themes').addEventListener('keydown', (e) => {
+  const edit = e.target.closest('[data-edit]');
+  if (edit && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); openThemeEditor(edit.dataset.edit); }
 });
 
-// ---- Theme editor: colour pickers for a theme of your own, saved with your settings
-const TE_COLORS = [
-  ['bg', 'Background', 'Behind the note'], ['surface', 'Cards and editor', 'Dialogs, menus, inputs'],
-  ['panel', 'Sidebar', 'File tree and bars'], ['line', 'Borders', 'Lines between things'],
-  ['text', 'Text', 'Most writing'], ['muted', 'Quiet text', 'Hints and labels'],
-  ['accent', 'Accent', 'Buttons, links, ticks'], ['accentSoft', 'Accent background', 'Selected rows'],
-  ['mark', 'Highlight', '==Marked== text'], ['codeBg', 'Code background', 'Code and code blocks'],
-  ['warn', 'Warning', 'Due soon, warnings'], ['danger', 'Danger', 'Delete, errors'],
+// ---- Custom theme: a dialog of colour pickers, previewed live on the whole app, saved with your settings
+const TE_GROUPS = [
+  ['Backgrounds', [['bg', 'Page', 'Behind your notes'], ['panel', 'Sidebar', 'File tree and bars'],
+    ['surface', 'Cards', 'Dialogs, menus and inputs'], ['codeBg', 'Code', 'Code and code blocks']]],
+  ['Text', [['text', 'Text', 'Most writing'], ['muted', 'Quiet text', 'Hints and labels']]],
+  ['Accent', [['accent', 'Accent', 'Buttons, links and ticks'], ['accentSoft', 'Accent tint', 'Selected rows'], ['mark', 'Highlight', '==Marked== text']]],
+  ['Lines and alerts', [['line', 'Borders', 'Lines between things'], ['warn', 'Warning', 'Due soon'], ['danger', 'Danger', 'Delete and errors']]],
 ];
-const TE_VARS = { accentSoft: 'accent-soft', codeBg: 'code-bg' };
-let teId = null;          // the custom theme being edited, or null for a new one
-let teSaved = null;       // what the editor showed when last loaded or saved, to tell if it changed
-const teDraft = () => {
-  const colors = {};
-  for (const [k] of TE_COLORS) colors[k] = $(`#te-c-${k}`).value;
-  return { id: teId, name: $('#te-name').value.trim(), dark: $('#te-dark').checked, colors };
-};
-const teDirty = () => teSaved !== null && JSON.stringify(teDraft()) !== teSaved;
-/** A theme's colours as #rrggbb, read from the stylesheet (built-in themes) or the saved theme. */
-function themeColors(id) {
+const TE_KEYS = TE_GROUPS.flatMap(([, rows]) => rows.map(([k]) => k));
+const TE_VAR = (k) => ({ accentSoft: 'accent-soft', codeBg: 'code-bg' })[k] || k;
+const teDlg = $('#dlg-theme');
+const te = { id: null, saved: null, css: null };   // the theme being edited, what it looked like when opened, and CSS it came from
+
+/** Any CSS colour as #rrggbb (via a 1×1 canvas, so rgb(), hsl(), names and color-mix() all work). */
+const teCanvas = document.createElement('canvas');
+teCanvas.width = teCanvas.height = 1;
+function toHex(color) {
+  const m = /^rgba?\(\s*(\d+(?:\.\d+)?)[,\s]+(\d+(?:\.\d+)?)[,\s]+(\d+(?:\.\d+)?)/.exec(color); // computed colours are usually rgb(): exact
+  if (m) return '#' + m.slice(1, 4).map((x) => Math.round(+x).toString(16).padStart(2, '0')).join('');
+  const ctx = teCanvas.getContext('2d', { willReadFrequently: true });
+  ctx.clearRect(0, 0, 1, 1);
+  ctx.fillStyle = '#000';
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  return '#' + [r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+/** The colours of theme `id` (built-in or your own), with `vars` (from custom CSS) laid over them. */
+function themeColors(id, vars = {}) {
   const own = (S.config?.customThemes || []).find((t) => t.id === id);
-  if (own) return { colors: { ...own.colors }, dark: own.dark };
   const probe = document.createElement('span');
   probe.dataset.theme = id;
   probe.hidden = true;
   document.body.append(probe);
-  const cs = getComputedStyle(probe);
-  const ctx = document.createElement('canvas').getContext('2d');
+  if (own) for (const k of TE_KEYS) probe.style.setProperty('--' + TE_VAR(k), own.colors[k]);
+  for (const [name, value] of Object.entries(vars)) probe.style.setProperty(name, value);
   const colors = {};
-  for (const [k] of TE_COLORS) {
-    ctx.fillStyle = '#000000';
-    ctx.fillStyle = cs.getPropertyValue('--' + (TE_VARS[k] || k)).trim() || '#000000';
-    colors[k] = /^#[0-9a-f]{6}$/i.test(ctx.fillStyle) ? ctx.fillStyle.toLowerCase() : '#000000';
+  for (const k of TE_KEYS) {
+    probe.style.color = `var(--${TE_VAR(k)})`;
+    colors[k] = toHex(getComputedStyle(probe).color);
   }
-  const dark = cs.colorScheme === 'dark';
+  const dark = own ? own.dark : getComputedStyle(probe).colorScheme === 'dark';
   probe.remove();
   return { colors, dark };
 }
-function teFill({ name, dark, colors }) {
-  $('#te-name').value = name;
-  $('#te-dark').checked = !!dark;
-  for (const [k] of TE_COLORS) $(`#te-c-${k}`).value = colors[k];
-  tePreview();
+// Readability: WCAG contrast between pairs the app really puts together.
+const lum = (hex) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+const TE_CHECKS = [
+  ['Text on the page', 'text', 'bg', 4.5], ['Text on cards', 'text', 'surface', 4.5], ['Text in the sidebar', 'text', 'panel', 4.5],
+  ['Quiet text', 'muted', 'bg', 3], ['Links and ticks', 'accent', 'bg', 3], ['Button labels', 'surface', 'accent', 3],
+  ['Highlighted text', 'text', 'mark', 4.5],
+];
+
+$('#te-colors').innerHTML = TE_GROUPS.map(([title, rows]) => `<div class="te-group"><h5>${esc(title)}</h5><div class="te-group-rows">` +
+  rows.map(([k, label, hint]) => `<div class="te-row"><input type="color" id="te-c-${k}" aria-label="${esc(label)}">` +
+    `<label class="te-label" for="te-c-${k}">${esc(label)}<small>${esc(hint)}</small></label>` +
+    `<input class="te-hex" id="te-h-${k}" maxlength="7" spellcheck="false" autocomplete="off" aria-label="${esc(label)} hex code"></div>`).join('') +
+  `</div></div>`).join('');
+
+const teMode = () => $('#dlg-theme .seg [aria-checked="true"]')?.dataset.mode === 'dark';
+function setMode(dark) { for (const b of document.querySelectorAll("#dlg-theme .seg button")) b.setAttribute('aria-checked', String((b.dataset.mode === 'dark') === dark)); }
+const teDraft = () => ({ id: te.id, name: $('#te-name').value.trim(), dark: teMode(), colors: Object.fromEntries(TE_KEYS.map((k) => [k, $(`#te-c-${k}`).value])) });
+const teDirty = () => te.saved !== null && JSON.stringify(teDraft()) !== te.saved;
+function teFill({ colors, dark }) {
+  for (const k of TE_KEYS) { $(`#te-c-${k}`).value = colors[k]; $(`#te-h-${k}`).value = colors[k]; $(`#te-h-${k}`).removeAttribute('aria-invalid'); }
+  setMode(!!dark);
 }
+/** Show the draft on the whole app (and the sample), and say how readable it is. */
 function tePreview() {
-  window.tickmarkThemes?.apply(S.config?.customThemes || [], { save: false, draft: teDraft() });
-  const dirty = teDirty();
-  $('#te-state').textContent = dirty ? 'Not saved yet' : '';
-  $('#te-save').disabled = teId !== null && !dirty;
-  $('#te-delete').hidden = teId === null;
+  const d = teDraft();
+  window.tickmarkThemes?.apply(S.config?.customThemes || [], { save: false, draft: d });
+  document.documentElement.dataset.theme = '__draft';
+  $('#te-checks').innerHTML = TE_CHECKS.map(([label, fg, bg, min]) => {
+    const r = contrast(d.colors[fg], d.colors[bg]);
+    return r >= min ? `<li><span class="ok">✓</span>${esc(label)}: easy to read</li>`
+      : `<li><span class="bad">⚠</span>${esc(label)}: hard to read (contrast ${r.toFixed(1)}, aim for ${min})</li>`;
+  }).join('');
+  $('#te-state').textContent = teDirty() ? 'Not saved yet' : '';
 }
-/** Open a saved theme (id) or start a new one from the current theme. */
-function teLoad(id) {
+function themeMenuOptions(selected) {
+  $('#te-base').innerHTML = allThemes().filter(([id]) => id !== 'system')
+    .map(([id, name]) => `<option value="${esc(id)}"${id === selected ? ' selected' : ''}>${esc(name)}</option>`).join('');
+  $('#te-base').value = selected;
+}
+/**
+ * Open the dialog on your theme `id`, or a new theme (id null) starting from the theme in use.
+ * `fromCss` = { vars, used } starts a new theme from the colours in your custom CSS.
+ */
+function openThemeEditor(id, fromCss = null) {
   const own = (S.config?.customThemes || []).find((t) => t.id === id);
-  teId = own ? own.id : null;
+  te.id = own ? own.id : null;
+  te.css = fromCss;
   const cur = window.tickmarkTheme?.get() || 'system';
-  const base = own ? id : cur === 'system' ? document.documentElement.dataset.theme : cur;
-  teFill({ name: own ? own.name : '', ...themeColors(base) });
-  teSaved = JSON.stringify(teDraft());
-  renderThemeEditor();
-}
-function renderThemeEditor() {
-  const own = S.config?.customThemes || [];
-  $('#te-pick').innerHTML = '<option value="">New theme</option>' + own.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
-  $('#te-pick').value = teId || '';
-  $('#te-base').innerHTML = '<option value="">Choose…</option>' + allThemes().filter(([id]) => id !== 'system')
-    .map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('');
+  const base = own ? own.id : cur === 'system' || cur === '__draft' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : cur;
+  $('#te-title').textContent = own ? `Edit “${own.name}”` : 'Custom theme';
+  $('#te-name').value = own ? own.name : fromCss ? 'From my CSS' : '';
+  $('#te-intro').textContent = fromCss
+    ? `${fromCss.used.length} colour${fromCss.used.length === 1 ? '' : 's'} came from your custom CSS (${fromCss.used.join(', ')}); the rest are from ${allThemes().find(([x]) => x === base)?.[1] || 'your theme'}. Adjust anything, then save.`
+    : 'Pick colours and watch the app change as you go. Nothing is kept until you save; Cancel puts everything back.';
+  themeMenuOptions(base);
+  teFill(themeColors(base, fromCss?.vars));
+  $('#te-delete').hidden = !own;
+  te.saved = JSON.stringify(teDraft());
+  if (!teDlg.open) teDlg.showModal();
   tePreview();
+  if (!own) $('#te-name').focus();
 }
-$('#te-colors').innerHTML = TE_COLORS.map(([k, label, hint]) =>
-  `<label class="te-color"><input type="color" id="te-c-${k}"><span>${esc(label)}<small>${esc(hint)}</small></span></label>`).join('');
-$('#theme-editor').addEventListener('input', tePreview);
-$('#te-pick').onchange = (e) => {
-  if (teDirty() && !confirm('Discard the changes to this theme?')) { e.target.value = teId || ''; return; }
-  teLoad(e.target.value || null);
-};
-$('#te-base').onchange = (e) => {
-  if (!e.target.value) return;
-  const { colors, dark } = themeColors(e.target.value);
-  teFill({ name: $('#te-name').value, dark, colors });
-  e.target.value = '';
-};
+/** Close, asking first if there are unsaved changes. */
+function teCancel() {
+  if (teDirty() && !confirm('Discard the changes to this theme?')) return;
+  te.saved = null;
+  teDlg.close();
+}
+teDlg.addEventListener('cancel', (e) => { e.preventDefault(); teCancel(); });
+teDlg.querySelector('[data-close]').onclick = teCancel;
+$('#te-cancel').onclick = teCancel;
+teDlg.addEventListener('close', () => { te.saved = null; applyCustomThemes(); });
+
+teDlg.addEventListener('input', (e) => {
+  const m = /^te-([ch])-(\w+)$/.exec(e.target.id || '');
+  if (m?.[1] === 'c') { $(`#te-h-${m[2]}`).value = e.target.value; $(`#te-h-${m[2]}`).removeAttribute('aria-invalid'); }
+  if (m?.[1] === 'h') {
+    const v = e.target.value.trim().toLowerCase().replace(/^#?/, '#');
+    const ok = /^#[0-9a-f]{6}$/.test(v) || /^#[0-9a-f]{3}$/.test(v);
+    e.target.setAttribute('aria-invalid', String(!ok));
+    if (!ok) return;
+    $(`#te-c-${m[2]}`).value = v.length === 4 ? '#' + [...v.slice(1)].map((c) => c + c).join('') : v;
+  }
+  tePreview();
+});
+$('#dlg-theme .seg').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-mode]');
+  if (b) { setMode(b.dataset.mode === 'dark'); tePreview(); }
+});
+// Start from: fills in that theme's colours, and stays showing what you picked.
+$('#te-base').onchange = (e) => { teFill(themeColors(e.target.value)); tePreview(); };
+
 $('#te-save').onclick = async () => {
   const d = teDraft();
-  if (!d.name) { $('#te-name').focus(); toast('Give the theme a name'); return; }
   const list = [...(S.config?.customThemes || [])];
-  if (!teId) {
-    const rnd = crypto.getRandomValues(new Uint8Array(5));
-    d.id = 'my-' + [...rnd].map((b) => b.toString(16).padStart(2, '0')).join('');
-    list.push(d);
-  } else list[list.findIndex((t) => t.id === teId)] = d;
+  if (!d.name) {
+    let n = list.length + 1;
+    while (list.some((t) => t.name === `My theme ${n}`)) n++;
+    d.name = `My theme ${n}`;
+  }
+  if (!te.id) d.id = 'my-' + [...crypto.getRandomValues(new Uint8Array(5))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const i = list.findIndex((t) => t.id === d.id);
+  if (i >= 0) list[i] = d; else list.push(d);
   try {
     S.config = await api('PUT', '/api/config', { customThemes: list });
     store.set('config', S.config);
-    teId = d.id;
-    teSaved = JSON.stringify(teDraft());
-    window.tickmarkThemes?.apply(S.config.customThemes);
+    te.saved = null;
     window.tickmarkTheme?.set(d.id);
+    teDlg.close();
     renderThemes();
-    renderThemeEditor();
-    $('#te-state').textContent = 'Saved';
+    toast(`Saved “${d.name}”`);
+    if (te.css) offerCssCleanup(te.css.used);
   } catch (e) { toast(e.message); }
 };
 $('#te-delete').onclick = async () => {
-  const t = (S.config?.customThemes || []).find((x) => x.id === teId);
+  const t = (S.config?.customThemes || []).find((x) => x.id === te.id);
   if (!t || !confirm(`Delete the theme “${t.name}”? Devices using it go back to System.`)) return;
   try {
     S.config = await api('PUT', '/api/config', { customThemes: S.config.customThemes.filter((x) => x.id !== t.id) });
     store.set('config', S.config);
-    window.tickmarkThemes?.apply(S.config.customThemes);
     if (window.tickmarkTheme?.get() === t.id) window.tickmarkTheme.set('system');
+    te.saved = null;
+    teDlg.close();
     renderThemes();
-    teLoad(null);
+    toast(`Deleted “${t.name}”`);
   } catch (e) { toast(e.message); }
 };
 /** Your saved themes, applied (and cached on this device) whenever your settings arrive. */
 function applyCustomThemes() { window.tickmarkThemes?.apply(S.config?.customThemes || []); }
+
+// ---- Custom CSS → theme: the theme colour variables set in custom CSS become a theme you can pick
+const THEME_VAR_NAMES = new Set(TE_KEYS.map((k) => '--' + TE_VAR(k)));
+/** Theme colour variables declared in `css` for the whole page (:root, html, body or a theme selector). */
+function cssThemeVars(css) {
+  const vars = {};
+  const clean = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const m of clean.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!/(:root|\bhtml\b|\bbody\b|\[data-theme)/i.test(m[1])) continue;
+    for (const d of m[2].matchAll(/(--[\w-]+)\s*:\s*([^;]+?)\s*(?:;|$)/g)) if (THEME_VAR_NAMES.has(d[1])) vars[d[1]] = d[2].replace(/\s*!important$/i, '');
+  }
+  return vars;
+}
+$('#btn-css-theme').onclick = () => {
+  const vars = cssThemeVars(cssBox.value);
+  const used = Object.keys(vars);
+  if (!used.length) {
+    toast('No theme colours found. Set variables like --accent or --bg on :root, then try again.');
+    return;
+  }
+  openThemeEditor(null, { vars, used });
+};
+/** After a theme was made from custom CSS: offer to take those colours out of the CSS, so they don't override every other theme. */
+async function offerCssCleanup(used) {
+  if (!confirm(`Your new theme has the colours from your custom CSS. Remove ${used.join(', ')} from your custom CSS, so they no longer override every other theme?`)) return;
+  let css = savedCss();
+  for (const name of used) css = css.replace(new RegExp(`\\s*${name.replace(/[-]/g, '\\-')}\\s*:[^;{}]*;?`, 'g'), '');
+  css = css.replace(/[^{}]*\{\s*\}\s*/g, '').trim();
+  cssBox.value = css ? css + '\n' : '';
+  await saveCss();
+}
+
 
 // ---- Help (the ? menu): the README, with its contents as a tree on the left
 const helpDlg = $('#dlg-help');
@@ -2569,20 +2667,19 @@ cssBox.addEventListener('keydown', (e) => {
   if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); cssBox.setRangeText('  ', cssBox.selectionStart, cssBox.selectionEnd, 'end'); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); $('#btn-css-save').click(); }
 });
-$('#btn-css-save').onclick = async () => {
+async function saveCss() {
   try {
     S.config = await api('PUT', '/api/config', { customCss: cssBox.value });
     store.set('config', S.config);
     applyCustomCss();
     cssState('Saved');
   } catch (e) { toast(e.message); }
-};
+}
+$('#btn-css-save').onclick = saveCss;
 $('#btn-css-revert').onclick = () => { cssBox.value = savedCss(); applyCustomCss(); cssState(); };
 // Leaving Settings with unsaved CSS puts the saved styles back.
 setDlg.addEventListener('close', () => {
   if (cssBox.value !== savedCss()) { cssBox.value = savedCss(); applyCustomCss(); }
-  teSaved = null; // an unsaved theme is dropped; the editor reloads next time
-  applyCustomThemes();
 });
 
 form.addEventListener('submit', async (e) => {
