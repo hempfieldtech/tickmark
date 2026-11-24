@@ -70,6 +70,8 @@
           <button data-view="split" class="split-only">Split</button>
           <button data-view="read">Preview</button>
         </div>
+        <button class="icon-btn" id="btn-zen-exit" aria-label="Leave zen mode" title="Leave zen mode (Ctrl+Shift+Enter)">
+          <svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg></button>
         <button class="icon-btn" id="btn-help" aria-label="Help" title="Help and keyboard shortcuts">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6"/><path d="M12 17h.01"/></svg></button>
         <button class="icon-btn" id="btn-more" aria-label="Note actions" title="Note actions">
@@ -208,6 +210,8 @@
             <span class="note">(normal, insert and visual modes, motions, operators, counts, text objects, search, marks and <code>:</code> commands; the bottom bar shows the mode)</span></span></label>
           <label class="check"><input type="checkbox" id="opt-lines"><span><span class="check-title">Line numbers</span>
             <span class="note">(beside the text, and the note's line count in the bottom bar)</span></span></label>
+          <label class="check"><input type="checkbox" id="opt-zen"><span><span class="check-title">Zen mode</span>
+            <span class="note">(hides the sidebar and both bars so only the text is left; point at the top edge for the bar again. Ctrl+Shift+Enter or Esc leaves it, as does the command palette)</span></span></label>
         </section>
 
         <section data-sec="about" class="set-body">

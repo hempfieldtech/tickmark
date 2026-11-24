@@ -125,6 +125,19 @@ kbd { font: 12px var(--mono); border: 1px solid var(--line); border-bottom-width
 #app.resizing { cursor: col-resize; user-select: none; }
 #app.no-sidebar { grid-template-columns: 0 1fr; }
 #app.no-sidebar #sidebar { visibility: hidden; }
+/* Zen mode: only the text. The top bar slides back while the pointer (or focus) is on it; the bottom bar stays away. */
+#btn-zen-exit { display: none; }
+#app.zen #btn-zen-exit { display: inline-flex; }
+#app.zen { grid-template-columns: 0 1fr; }
+#app.zen #sidebar, #app.zen #side-resize { visibility: hidden; }
+#app.zen #main { position: relative; }
+#app.zen #topbar { position: absolute; top: 0; left: 0; right: 0; z-index: 30; background: var(--bg); opacity: 0; transform: translateY(-70%);
+  transition: opacity .18s, transform .18s; }
+#app.zen #topbar:hover, #app.zen #topbar:focus-within { opacity: 1; transform: none; }
+#app.zen #word-count:not(:has(#vim-mode:not([hidden]), #vim-prompt:not([hidden]))) { display: none !important; }
+#app.zen #word-count #wc-words, #app.zen #word-count #wc-lines, #app.zen #word-count #wc-tasks, #app.zen #word-count #wc-share { display: none; }
+#app.zen.view-split #editor { border-right: 0; }
+#app.zen #editor { padding-top: 56px; }
 
 /* ---------- sidebar ---------- */
 #sidebar { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; overflow: hidden; position: relative; }
@@ -462,7 +475,10 @@ details.card[open] summary { margin-bottom: 4px; }
 
 /* ---------- mobile ---------- */
 @media (max-width: 760px) {
-  #app, #app.no-sidebar { grid-template-columns: 1fr; }
+  #app, #app.no-sidebar, #app.zen { grid-template-columns: 1fr; }
+  /* no hover on a phone: keep the top bar in zen mode, drop only the sidebar and bottom bar */
+  #app.zen #topbar { position: static; opacity: 1; transform: none; }
+  #app.zen #editor { padding-top: 18px; }
   #sidebar { position: fixed; inset: 0 auto 0 0; width: min(300px, 85vw); z-index: 40; transform: translateX(-100%); transition: transform .2s; visibility: visible !important; }
   #app.sidebar-open #sidebar { transform: none; }
   #app.sidebar-open #scrim { display: block; position: fixed; inset: 0; background: rgb(0 0 0 / .35); z-index: 30; }

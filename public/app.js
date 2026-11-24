@@ -15,7 +15,7 @@ const enc = encodeURIComponent;
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 // Per-user keys (notes cache, unsaved edits, settings) are namespaced by the signed-in user, so two
 // people sharing a browser never see, or save into, each other's notes. View prefs are per device.
-const DEVICE_KEYS = new Set(['view', 'noSidebar', 'vim', 'lineNumbers', 'sideWidth']);
+const DEVICE_KEYS = new Set(['view', 'noSidebar', 'vim', 'lineNumbers', 'zen', 'sideWidth']);
 const store = {
   user: '',
   key(k) { return 'tickmark:' + (this.user && !DEVICE_KEYS.has(k) ? `u:${this.user}:` : '') + k; },
@@ -685,6 +685,24 @@ function setLineNumbers(on) {
   renderWordCount();
 }
 el.app.classList.toggle('line-numbers', S.lineNumbers);
+
+// ---- zen mode (Settings → Editor, command palette): just the text; the top bar comes back when you point at it
+S.zen = !!store.get('zen', false);
+function setZen(on) {
+  S.zen = !!on;
+  store.set('zen', S.zen);
+  el.app.classList.toggle('zen', S.zen);
+  el.app.classList.remove('sidebar-open');
+  if ($('#opt-zen')) $('#opt-zen').checked = S.zen;
+  requestAnimationFrame(() => { renderGutter(); renderCursors(); });
+}
+el.app.classList.toggle('zen', S.zen);
+$('#btn-zen-exit').onclick = () => setZen(false);
+// Esc leaves zen mode, unless Vim mode wants Esc or something else already used it.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !S.zen || e.defaultPrevented || S.vim || document.querySelector('dialog[open]')) return;
+  setZen(false);
+});
 function renderGutter() {
   const ed = el.editor;
   if (!S.lineNumbers || S.mode !== 'note' || effectiveView() === 'read' || ed.hidden) { gutter.hidden = true; return; }
@@ -1113,6 +1131,7 @@ function cycleView() {
 }
 
 function toggleSidebar() {
+  if (S.zen) { setZen(false); if (!mobile.matches && !el.app.classList.contains('no-sidebar')) return; }
   if (mobile.matches) el.app.classList.toggle('sidebar-open');
   else { el.app.classList.toggle('no-sidebar'); store.set('noSidebar', el.app.classList.contains('no-sidebar')); }
 }
@@ -1493,6 +1512,7 @@ function commands() {
     { id: 'view-collapse', label: 'View: Collapse all folders', run: () => { S.openFolders.clear(); store.set('openFolders', []); renderTree(); } },
     { id: 'editor-vim', label: `Editor: ${S.vim ? 'Turn off' : 'Turn on'} Vim mode`, run: () => { setVim(!S.vim); toast(`Vim mode ${S.vim ? 'on' : 'off'}`); } },
     { id: 'editor-lines', label: `Editor: ${S.lineNumbers ? 'Hide' : 'Show'} line numbers`, run: () => setLineNumbers(!S.lineNumbers) },
+    { id: 'editor-zen', label: `Editor: ${S.zen ? 'Leave' : 'Enter'} zen mode`, hint: 'Ctrl+Shift+Enter', run: () => setZen(!S.zen) },
     { id: 'sync-now', label: 'Sync: Sync now', run: () => runSync({ manual: true }) },
     ...(S.config?.accounts || []).filter((a) => a.id).map((a) => ({ id: 'sync-log-' + a.id, label: `Sync: History of ${a.name}…`, run: () => openSyncLog(a.id, a.name) })),
     { id: 'trash', label: 'Trash…', run: () => openTrash() },
@@ -1740,11 +1760,12 @@ function showSection(sec) {
   if (sec === 'deleted') loadDeleted('set');
   if (sec === 'templates') renderTemplates();
   if (sec === 'about') { loadAbout(); loadAboutTasks(); }
-  if (sec === 'editor') { $('#opt-vim').checked = S.vim; $('#opt-lines').checked = S.lineNumbers; }
+  if (sec === 'editor') { $('#opt-vim').checked = S.vim; $('#opt-lines').checked = S.lineNumbers; $('#opt-zen').checked = S.zen; }
   $('#btn-logout').hidden = !isMulti();
 }
 $('#opt-vim').onchange = (e) => setVim(e.target.checked);
 $('#opt-lines').onchange = (e) => setLineNumbers(e.target.checked);
+$('#opt-zen').onchange = (e) => setZen(e.target.checked);
 
 // ---- Settings → About
 async function loadAbout() {
@@ -2185,7 +2206,7 @@ const KEYMAP = [
     ['Ctrl+N', 'New note'], ['Ctrl+Shift+F', 'Search the text of all notes'], ['Ctrl+S', 'Save now (it also saves by itself)'],
   ] },
   { group: 'Views and panels', items: [
-    ['Ctrl+E', 'Switch between Source, Split and Preview'], ['Ctrl+\\', 'Show or hide the sidebar'],
+    ['Ctrl+E', 'Switch between Source, Split and Preview'], ['Ctrl+\\', 'Show or hide the sidebar'], ['Ctrl+Shift+Enter', 'Zen mode on or off (Esc also leaves it)'],
     ['Ctrl+/', 'These keybindings'], ['Esc', 'Close a dialog, menu or the Properties panel'],
   ] },
   { group: 'Writing', items: [
@@ -3278,6 +3299,7 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'e') { e.preventDefault(); cycleView(); }
   else if (k === 'n' && !e.shiftKey) { e.preventDefault(); newNote(); }
   else if (k === '\\') { e.preventDefault(); toggleSidebar(); }
+  else if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); setZen(!S.zen); }
   else if (k === 'f' && e.shiftKey) { e.preventDefault(); if (mobile.matches) el.app.classList.add('sidebar-open'); el.search.focus(); }
 });
 

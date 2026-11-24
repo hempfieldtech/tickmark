@@ -198,11 +198,11 @@ Source / split / preview (Ctrl+E cycles). Preview checkboxes are clickable and e
 
 **Search.** The sidebar search looks in note names and text. Opening a result goes to the first place the search appears: selected in the editor and marked in the preview.
 
-**Command palette.** Ctrl+Shift+P (or F1) lists everything Tickmark can do by name: note actions, views, settings sections, themes, sync, Vim and line numbers, and the notes matching what you type. Commands you used last come first.
+**Command palette.** Ctrl+Shift+P (or F1) lists everything Tickmark can do by name: note actions, views, settings sections, themes, sync, Vim, line numbers and zen mode, and the notes matching what you type. Commands you used last come first.
 
 **Help.** The **?** button (top right) → **Help** shows this README with its sections as a tree on the left (with a filter), and **Keybindings** lists every shortcut, grouped, with a search (Ctrl+/ opens it too).
 
-**Editor settings.** Settings → **Editor** (per device) turns on **Vim mode** (normal, insert, visual and replace modes; motions, operators, text objects, counts, registers including the clipboard, marks, `/` search, `.` repeat and `:w :q :s :%s :sort :{line} :e note` — the bottom bar shows the mode and takes `:` commands; Keybindings has the full list) and **line numbers** (beside the text, matching wrapped lines, plus the note's line count in the bottom bar).
+**Editor settings.** Settings → **Editor** (per device) turns on **Vim mode** (normal, insert, visual and replace modes; motions, operators, text objects, counts, registers including the clipboard, marks, `/` search, `.` repeat and `:w :q :s :%s :sort :{line} :e note` — the bottom bar shows the mode and takes `:` commands; Keybindings has the full list), **line numbers** (beside the text, matching wrapped lines, plus the note's line count in the bottom bar) and **zen mode** (just the text: the sidebar and bottom bar go away and the top bar hides until you point at the top edge; Ctrl+Shift+Enter, Esc when Vim mode is off, the top bar's exit button or the palette's "Editor: Leave zen mode" turn it off).
 
 **The bottom bar** shows the note's words and characters, its checklist items by state (to do, in progress, done, cancelled), and **Public link** when the note (or its folder) is shared; click that to manage the link.
 
@@ -320,6 +320,7 @@ Square, flat look:
 | right-click a checkbox (preview) | set it to to do `[ ]`, in progress `[/]`, done `[x]` or cancelled `[-]` |
 | Enter / Tab / Shift+Tab | continue, indent, or outdent lists |
 | Ctrl+S, Ctrl+E, Ctrl+\\, Ctrl+Shift+F | save, cycle view, toggle sidebar, search |
+| Ctrl+Shift+Enter | zen mode on or off (Esc also leaves it while Vim mode is off) |
 
 The app works offline. Notes you've opened are cached, and edits are queued on the device and merged when the server is reachable again.
 
