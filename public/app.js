@@ -1739,7 +1739,7 @@ function showSection(sec) {
   if (sec === 'shares') loadShares();
   if (sec === 'deleted') loadDeleted('set');
   if (sec === 'templates') renderTemplates();
-  if (sec === 'about') loadAbout();
+  if (sec === 'about') { loadAbout(); loadAboutTasks(); }
   if (sec === 'editor') { $('#opt-vim').checked = S.vim; $('#opt-lines').checked = S.lineNumbers; }
   $('#btn-logout').hidden = !isMulti();
 }
@@ -1769,6 +1769,61 @@ async function loadAbout() {
   dl.innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('') +
     `<dt>Source</dt><dd><a href="https://github.com/hempfieldtech/tickmark" target="_blank" rel="noopener">github.com/hempfieldtech/tickmark</a></dd>`;
 }
+
+// ---- Settings → About → Tasks: every checklist item across your notes, by state
+const AT_STATES = [['all', 'All'], ['todo', 'To do'], ['doing', 'In progress'], ['done', 'Done'], ['cancelled', 'Cancelled']];
+const atBox = (inner) => `<svg viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="13" height="13" rx="3"/>${inner}</svg>`;
+const AT_ICON = {
+  todo: atBox(''),
+  doing: atBox('<path class="fill" d="M4 12V4h4v8z"/>'),
+  done: atBox('<path d="M4.5 8.3l2.4 2.4 4.6-5"/>'),
+  cancelled: atBox('<path d="M4.5 8h7"/>'),
+};
+const AT_LABEL = { todo: 'To do', doing: 'In progress', done: 'Done', cancelled: 'Cancelled' };
+const at = { tasks: [], filter: 'todo', q: '' };
+async function loadAboutTasks() {
+  at.filter = store.get('aboutTaskFilter', 'todo');
+  try { at.tasks = await api('GET', '/api/tasks/all'); } catch (e) { $('#at-list').innerHTML = `<p class="note err">${esc(e.message)}</p>`; return; }
+  renderAboutTasks();
+}
+function renderAboutTasks() {
+  const count = (k) => (k === 'all' ? at.tasks.length : at.tasks.filter((t) => t.state === k).length);
+  $('#at-chips').innerHTML = AT_STATES.map(([k, label]) =>
+    `<button type="button" role="radio" data-f="${k}" aria-checked="${k === at.filter}">${esc(label)}<b>${count(k)}</b></button>`).join('');
+  const q = at.q.toLowerCase();
+  const shown = at.tasks.filter((t) => (at.filter === 'all' || t.state === at.filter) && (!q || t.title.toLowerCase().includes(q) || t.path.toLowerCase().includes(q)));
+  if (!shown.length) {
+    $('#at-list').innerHTML = `<p class="note">${at.tasks.length ? 'No tasks match.' : 'No checklist items in your notes yet.'}</p>`;
+    return;
+  }
+  const today = localDate(new Date());
+  const groups = new Map();
+  for (const t of shown) { if (!groups.has(t.path)) groups.set(t.path, []); groups.get(t.path).push(t); }
+  $('#at-list').innerHTML = [...groups].map(([path, list]) => `<div class="at-note"><h5><button type="button" data-open="${esc(path)}">${esc(path.replace(/\.md$/i, ''))}</button></h5><ul>` +
+    list.map((t) => {
+      const overdue = t.due && t.due.slice(0, 10) < today && (t.state === 'todo' || t.state === 'doing');
+      return `<li><button type="button" class="at-task ${t.state}" data-open="${esc(t.path)}" data-line="${t.line}" title="${esc(AT_LABEL[t.state])}">` +
+        `<span class="at-st" aria-label="${esc(AT_LABEL[t.state])}">${AT_ICON[t.state]}</span><span class="t">${esc(t.title || '(empty)')}</span>` +
+        (t.due ? `<span class="meta${overdue ? ' overdue' : ''}">${esc(t.due)}</span>` : '') +
+        (t.synced ? '<span class="meta" title="Syncs with CalDAV">⇅</span>' : '') + '</button></li>';
+    }).join('') + '</ul></div>').join('') +
+    (at.tasks.length >= 5000 ? '<p class="note">Showing the first 5,000 tasks.</p>' : '');
+}
+$('#at-chips').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-f]');
+  if (!b) return;
+  at.filter = b.dataset.f;
+  store.set('aboutTaskFilter', at.filter);
+  renderAboutTasks();
+});
+$('#at-search').addEventListener('input', debounce((e) => { at.q = e.target.value.trim(); renderAboutTasks(); }, 150));
+$('#at-list').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-open]');
+  if (!b) return;
+  setDlg.close();
+  open(b.dataset.open, b.dataset.line != null ? { line: Number(b.dataset.line) } : {});
+});
+
 setDlg.querySelectorAll('.set-nav [data-sec]').forEach((b) => (b.onclick = () => showSection(b.dataset.sec)));
 setDlg.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { e.preventDefault(); showSection(g.dataset.goto); } });
 

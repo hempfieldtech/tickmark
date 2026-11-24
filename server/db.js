@@ -116,6 +116,16 @@ export class Index {
     } catch { return []; }
   }
 
+  /** Every checklist item in the vault (not templates), with its state from the checkbox: todo, doing, done or cancelled. */
+  allTasks(limit = 5000) {
+    const state = { ' ': 'todo', '/': 'doing', x: 'done', X: 'done', '-': 'cancelled' };
+    return this.db.prepare("SELECT path, line, title, due, priority, synced, raw FROM tasks WHERE path NOT LIKE 'Templates/%' ORDER BY path COLLATE NOCASE, line LIMIT ?")
+      .all(limit).map((t) => ({
+        path: t.path, line: t.line, title: (t.title || '').replace(/(^|\s)#[\p{L}\p{N}_/-]+/gu, '').replace(/\s+/g, ' ').trim(), due: t.due || null, priority: t.priority ?? null, synced: !!t.synced,
+        state: state[/\[(.)\]/.exec(t.raw || '')?.[1]] || 'todo',
+      }));
+  }
+
   pathsWithSyncedTasks() {
     return this.db.prepare('SELECT DISTINCT path FROM tasks WHERE synced = 1 UNION SELECT DISTINCT path FROM sync_states WHERE path IS NOT NULL').all().map((r) => r.path);
   }

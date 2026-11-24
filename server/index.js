@@ -470,6 +470,7 @@ const routes = {
       accounts: ws.config.get().accounts.filter((a) => a.url && a.calendarUrl).length,
     };
   },
+  'GET /api/tasks/all': ({ ws }) => ws.index.allTasks(),
   // ---- the README, for Help
   'GET /api/readme': () => {
     try { return { markdown: fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8') }; } catch { return { markdown: null }; }

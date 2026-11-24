@@ -218,7 +218,7 @@ Source / split / preview (Ctrl+E cycles). Preview checkboxes are clickable and e
 
 **The ⋯ menu** holds only things to do with the open note, A to Z: Apply template, Deleted tasks, History, Move to trash, Properties, Share. Rename a note by clicking its name; sync by clicking the sync status; themes and templates are in Settings. Drag the sidebar's edge to make it wider or narrower (double-click the edge to reset).
 
-**Settings → About** shows the versions of the server and of the app you have open, what the server runs on, and which optional features (public links, note history, sign-in) are available.
+**Settings → About** shows the versions of the server and of the app you have open, what the server runs on, and which optional features (public links, note history, sign-in) are available. Below that, **Tasks** lists every checklist item in your notes (templates aside), grouped by note, with its state: filter by to do, in progress, done or cancelled, or type to search; due dates show, overdue ones in red, and ⇅ marks the ones that sync. Click one to open its note at that line.
 
 **Updates.** The server fingerprints the app's files when it starts. An open app (an installed one on a phone especially) checks the fingerprint whenever you come back to it, and reloads into the new version after saving your note, so it never keeps running old code or styles.
 

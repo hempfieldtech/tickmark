@@ -675,6 +675,30 @@ details.card[open] summary { margin-bottom: 4px; }
 .about dt { color: var(--muted); }
 .about dd { margin: 0; overflow-wrap: anywhere; }
 .about a { color: var(--accent); }
+/* Settings → About → Tasks */
+.at-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.at-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+.at-chips button { border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.at-chips button b { font-weight: 600; margin-left: 4px; color: var(--muted); }
+.at-chips button[aria-checked="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.at-bar input { flex: 0 1 200px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); min-width: 0; }
+.at-list { display: grid; gap: 10px; }
+.at-note h5 { margin: 0 0 4px; font-size: 13px; }
+.at-note h5 button { border: 0; background: none; padding: 0; font: inherit; color: var(--text); cursor: pointer; }
+.at-note h5 button:hover { color: var(--accent); }
+.at-note ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 6px; }
+.at-note li + li { border-top: 1px solid var(--line); }
+.at-task { display: flex; gap: 8px; align-items: baseline; width: 100%; border: 0; background: none; color: var(--text); text-align: left; padding: 5px 10px; font: inherit; font-size: 13.5px; cursor: pointer; }
+.at-task:hover { background: var(--accent-soft); }
+.at-task .at-st { flex: none; display: inline-flex; align-self: center; color: var(--muted); }
+.at-st svg { width: 15px; height: 15px; stroke-width: 1.5; }
+.at-st svg .fill { fill: currentColor; stroke: none; }
+.at-task .t { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.at-task.done .t, .at-task.cancelled .t { color: var(--muted); text-decoration: line-through; }
+.at-task.doing .at-st { color: var(--warn); }
+.at-task.done .at-st { color: var(--accent); }
+.at-task .meta { flex: none; font-size: 12px; color: var(--muted); }
+.at-task .meta.overdue { color: var(--danger); }
 .set-nav .nav-logout { margin-top: auto; color: var(--danger); }
 .set-nav .nav-logout[hidden] { display: none; }
 @media (max-width: 760px) { .set-nav .nav-logout { margin-top: 0; margin-left: auto; } }

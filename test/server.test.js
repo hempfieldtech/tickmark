@@ -924,3 +924,23 @@ test("admins see everyone's public links by user, and can stop any of them", asy
     assert.equal((await alex.call('GET', `/api/public/${bs.token}`)).status, 404);
   } finally { await srv.stop(); }
 });
+
+test('every checklist item across notes, with its state (for About)', async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault') });
+  const { call } = client(srv.base);
+  try {
+    await call('POST', '/api/file', { path: 'Work/Plan.md', content: '# Plan\n- [ ] Write #task 📅 2026-01-02\n- [/] Draft\n- [x] Done thing\n- [-] Dropped\nplain line\n' });
+    await call('POST', '/api/file', { path: 'Home.md', content: '* [ ] Milk\n' });
+    await call('POST', '/api/file', { path: 'Templates/Day.md', content: '- [ ] Template item\n' });
+    const all = (await call('GET', '/api/tasks/all')).data;
+    assert.deepEqual(all.map((t) => [t.path, t.line, t.state, t.title]), [
+      ['Home.md', 0, 'todo', 'Milk'],
+      ['Work/Plan.md', 1, 'todo', 'Write'], ['Work/Plan.md', 2, 'doing', 'Draft'],
+      ['Work/Plan.md', 3, 'done', 'Done thing'], ['Work/Plan.md', 4, 'cancelled', 'Dropped'],
+    ]);
+    const w = all.find((t) => t.title === 'Write');
+    assert.equal(w.due, '2026-01-02');
+    assert.equal(w.synced, false, 'no CalDAV account, so nothing syncs');
+  } finally { await srv.stop(); }
+});
