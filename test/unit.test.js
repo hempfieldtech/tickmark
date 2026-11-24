@@ -322,6 +322,17 @@ test('settings keep custom CSS and the move-completed switch', async () => {
   assert.throws(() => c.update({ customCss: 'x'.repeat(100_001) }), /100 KB/);
 });
 
+test('sync intervals are off or at least a minute', async () => {
+  const { Config, syncMinutes } = await import('../server/config.js');
+  assert.deepEqual([0, -3, '', 'x', 0.0005, 0.5, 1, 5, '10', 1e9].map(syncMinutes), [0, 0, 0, 0, 1, 1, 1, 5, 10, 10080]);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tickmark-cfg-'));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ serverSyncMinutes: 0.0005, clientSyncMinutes: 0.01 }));
+  const c = new Config(dir);
+  assert.equal(c.get().serverSyncMinutes, 1, 'an old tiny value is raised on load');
+  assert.equal(c.update({ serverSyncMinutes: 0.0005 }).serverSyncMinutes, 1);
+  assert.equal(c.update({ serverSyncMinutes: 0 }).serverSyncMinutes, 0);
+});
+
 test('custom themes are checked before they are saved', async () => {
   const { Config } = await import('../server/config.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tickmark-cfg-'));

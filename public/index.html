@@ -152,8 +152,8 @@
             <h4 class="sub-head">Sync</h4>
             <p class="note">Also understood on checklist items: <code>📅 2026-11-25</code>, <code>due:2026-11-25 14:00</code>, <code>⏫ 🔼 🔽</code>, <code>🔁 every week</code>.</p>
             <div class="row">
-              <label>Sync while open, every (min) <input name="clientSyncMinutes" type="number" min="0" step="1"></label>
-              <label>Server background sync (min, 0 = off) <input name="serverSyncMinutes" type="number" min="0" step="1"></label>
+              <label>Sync while open, every (min) <input name="clientSyncMinutes" type="number" min="0" step="1" title="0 is off; otherwise at least 1"></label>
+              <label>Server background sync (min, 0 = off) <input name="serverSyncMinutes" type="number" min="0" step="1" title="0 is off; otherwise at least 1"></label>
             </div>
             <label class="check"><input name="moveCompleted" type="checkbox"> Move checked items under a “Complete” heading, and cancelled ones under “Cancelled”, at the end of their section (and back out when reopened)</label>
           </section>

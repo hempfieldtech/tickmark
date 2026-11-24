@@ -119,11 +119,22 @@ if (MULTI) {
 // With several users, only admins may point CalDAV at addresses inside the network (a user could
 // otherwise use the server to probe the LAN). TICKMARK_ALLOW_PRIVATE_CALDAV=true lifts that.
 const PRIVATE_CALDAV = /^(1|true|yes)$/i.test(process.env.TICKMARK_ALLOW_PRIVATE_CALDAV || '');
+destinationPolicy.guard = (owner) => MULTI && !PRIVATE_CALDAV && !(owner && users.get(owner)?.admin);
 destinationPolicy.check = async (url, owner) => {
-  if (!MULTI || PRIVATE_CALDAV) return;
-  if (owner && users.get(owner)?.admin) return;
-  await refusePrivate(url);
+  if (destinationPolicy.guard(owner)) await refusePrivate(url);
 };
+
+/**
+ * The saved password of account `saved`, but only for a URL on that account's own server: otherwise
+ * anyone with a session could send it to a server of their choosing and read it there.
+ */
+function savedPassword(saved, url) {
+  if (!saved?.password) return '';
+  const origin = (u) => { try { return new URL(u).origin; } catch { return null; } };
+  const target = origin(url);
+  if (target && [saved.url, saved.calendarUrl].some((u) => u && origin(u) === target)) return saved.password;
+  throw Object.assign(new Error('That is a different server from the saved one: enter the password for it'), { status: 400 });
+}
 
 function workspaceFor(name) {
   if (!MULTI) return single;
@@ -518,7 +529,7 @@ const routes = {
       owner: user?.name ?? null,
       url: body.url || saved?.url,
       username: body.username ?? saved?.username,
-      password: body.password || saved?.password,
+      password: body.password || savedPassword(saved, body.url || saved?.url),
     });
     return { calendars: await client.discover() };
   },
@@ -528,7 +539,7 @@ const routes = {
       owner: user?.name ?? null,
       url: body.url || saved?.url,
       username: body.username ?? saved?.username,
-      password: body.password || saved?.password,
+      password: body.password || savedPassword(saved, body.url || saved?.url),
     });
     return await client.createCalendar(body.name);
   },

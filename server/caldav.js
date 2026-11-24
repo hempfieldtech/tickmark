@@ -4,31 +4,85 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
+import http from 'node:http';
+import https from 'node:https';
 
 /**
  * Who may reach which servers. `check(url, owner)` throws to refuse a destination; index.js sets it
  * so that, with several users, only admins can point Tickmark at addresses inside the network.
+ * `guard(owner)` is true when that check must also hold at connection time (see guardedFetch).
  */
-export const destinationPolicy = { check: null };
+export const destinationPolicy = { check: null, guard: null };
 const MAX_REPLY = 25 * 1024 * 1024; // a task list's REPORT reply; anything bigger isn't a CalDAV server
 
-/** True for loopback, private, link-local, CGNAT, unique-local and unspecified addresses. */
+/** An IPv6 address as eight numbers, or null if it isn't one. Handles "::" and a dotted IPv4 tail. */
+function hextets(ip) {
+  let v = ip.toLowerCase().replace(/^\[|\]$/g, '').replace(/%.*$/, '');
+  const tail = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(v);
+  if (tail) {
+    const [a, b, c, d] = tail[2].split('.').map(Number);
+    v = tail[1] + ((a << 8) | b).toString(16) + ':' + ((c << 8) | d).toString(16);
+  }
+  const halves = v.split('::');
+  if (halves.length > 2) return null;
+  const part = (x) => (x ? x.split(':') : []);
+  const head = part(halves[0]), rest = halves.length === 2 ? part(halves[1]) : [];
+  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
+  const all = [...head, ...Array(Math.max(0, fill)).fill('0'), ...rest];
+  if (all.length !== 8 || !all.every((h) => /^[0-9a-f]{1,4}$/.test(h))) return null;
+  return all.map((h) => parseInt(h, 16));
+}
+const v4 = (hi, lo) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+
+/**
+ * True for loopback, private, link-local, CGNAT, unique-local, multicast and unspecified addresses,
+ * including IPv4 ones written inside IPv6 (::ffff:7f00:1, ::127.0.0.1, 64:ff9b::/96, 2002::/16).
+ */
 export function isPrivateAddress(ip) {
   if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
+    const [a, b, c] = ip.split('.').map(Number);
     return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 192 && b === 0 && c === 0) ||
+      (a === 198 && (b === 18 || b === 19)) || a >= 224;
   }
-  const v = ip.toLowerCase().replace(/^\[|\]$/g, '');
-  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v);
-  if (m) return isPrivateAddress(m[1]);
-  return v === '::' || v === '::1' || /^f[cd]/.test(v) || /^fe[89ab]/.test(v) || /^ff/.test(v);
+  const h = hextets(ip);
+  if (!h) return true; // not an address we understand: refuse rather than guess
+  if (h.slice(0, 5).every((x) => x === 0) && (h[5] === 0xffff || h[5] === 0)) return isPrivateAddress(v4(h[6], h[7])); // ::ffff:a.b.c.d, ::a.b.c.d, ::, ::1
+  if (h[0] === 0x64 && h[1] === 0xff9b && h.slice(2, 6).every((x) => x === 0)) return isPrivateAddress(v4(h[6], h[7])); // NAT64
+  if (h[0] === 0x64 && h[1] === 0xff9b && h[2] === 1) return true; // local-use NAT64
+  if (h[0] === 0x2002) return isPrivateAddress(v4(h[1], h[2])); // 6to4
+  return (h[0] & 0xfe00) === 0xfc00 || (h[0] & 0xffc0) === 0xfe80 || (h[0] & 0xffc0) === 0xfec0 || (h[0] & 0xff00) === 0xff00;
 }
+const insideMessage = (host) => `${host} is inside the network; ask an admin to set up this account`;
 /** Refuse a URL whose host is (or resolves to) a private address. */
 export async function refusePrivate(url) {
   const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
   const addrs = net.isIP(host) ? [host] : (await dns.lookup(host, { all: true }).catch(() => [])).map((a) => a.address);
-  if (addrs.some(isPrivateAddress)) throw new CalDAVError(`${host} is inside the network; ask an admin to set up this account`, 403);
+  if (addrs.some(isPrivateAddress)) throw new CalDAVError(insideMessage(host), 403);
+}
+
+/**
+ * fetch() for users who may not reach private addresses. The address is checked when the connection
+ * is made (a DNS lookup hook), so a name can't answer "public" to the check and "private" to the
+ * connection (DNS rebinding). Returns the parts of a fetch Response that request() uses.
+ */
+function guardedFetch(url, { method, headers, body, signal }) {
+  const u = new URL(url);
+  const lookup = (hostname, opts, cb) => dns.lookup(hostname, { ...opts, all: true }).then((addrs) => {
+    if (!addrs.length || addrs.some((a) => isPrivateAddress(a.address))) return cb(new CalDAVError(insideMessage(hostname), 403));
+    opts.all ? cb(null, addrs) : cb(null, addrs[0].address, addrs[0].family);
+  }, (e) => cb(e));
+  const mod = u.protocol === 'https:' ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = mod.request(u, { method, headers: { ...headers, ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}) }, lookup, signal }, (res) => {
+      const h = new Headers();
+      for (const [k, v] of Object.entries(res.headers)) for (const x of [].concat(v)) h.append(k, x);
+      res.cancel = () => res.destroy();
+      resolve({ status: res.statusCode, statusText: res.statusMessage || '', headers: h, body: res, url });
+    });
+    req.on('error', (e) => reject(e instanceof CalDAVError ? e : Object.assign(new Error(e.message), { cause: e })));
+    req.end(body);
+  });
 }
 
 async function readCapped(res) {
@@ -225,8 +279,10 @@ export class CalDAV {
       for (let hop = 0; ; hop++) {
         await destinationPolicy.check?.(at, this.owner);
         try {
-          res = await fetch(at, { method, headers: h, body, redirect: 'manual', signal: AbortSignal.timeout(30000) });
+          const opts = { method, headers: h, body, redirect: 'manual', signal: AbortSignal.timeout(30000) };
+          res = await (destinationPolicy.guard?.(this.owner) ? guardedFetch(at, opts) : fetch(at, opts));
         } catch (e) {
+          if (e instanceof CalDAVError) throw e;
           throw new CalDAVError(`Could not reach ${new URL(at).host}: ${e.cause?.code || e.message}`, 0);
         }
         const loc = res.headers.get('location');

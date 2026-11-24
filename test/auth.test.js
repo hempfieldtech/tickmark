@@ -83,3 +83,34 @@ test('basic still works', async () => {
     await assert.rejects(new CalDAV({ url: srv.url, username: 'alex', password: 'nope' }).propfind(srv.url, '<d:displayname/>'), { status: 401 });
   } finally { srv.s.close(); }
 });
+
+test('private addresses: IPv4 written inside IPv6 is still private', async () => {
+  const { isPrivateAddress } = await import('../server/caldav.js');
+  const host = (u) => new URL(u).hostname.replace(/^\[|\]$/g, '');
+  for (const ip of ['127.0.0.1', '10.1.2.3', '192.168.187.5', '169.254.169.254', '100.64.0.1', '0.0.0.0', '198.18.0.1',
+    '::1', '::', 'fc00::1', 'fd12::1', 'fe80::1', 'ff02::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '0:0:0:0:0:ffff:7f00:1',
+    '::127.0.0.1', '::ffff:c0a8:bb05', '64:ff9b::a00:1', '64:ff9b:1::1', '2002:7f00:1::', '2002:c0a8:0101::1',
+    host('http://[::ffff:127.0.0.1]/'), host('http://[::ffff:10.0.0.1]/'), 'nonsense']) {
+    assert.equal(isPrivateAddress(ip), true, ip);
+  }
+  for (const ip of ['1.1.1.1', '172.67.165.110', '2606:4700:3036::ac43:a56e', '::ffff:8.8.8.8', '64:ff9b::808:808', '2002:808:808::1', '2001:4860:4860::8888']) {
+    assert.equal(isPrivateAddress(ip), false, ip);
+  }
+});
+
+test('guarded requests check the address when connecting (no DNS rebinding)', async () => {
+  const { destinationPolicy } = await import('../server/caldav.js');
+  const srv = http.createServer((req, res) => res.writeHead(207).end('<d:multistatus xmlns:d="DAV:"/>'));
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const url = `http://localhost:${srv.address().port}/dav/`;
+  const saved = { ...destinationPolicy };
+  try {
+    // Pretend the up-front check was fooled (a name answering "public" first): the connection still refuses.
+    destinationPolicy.check = null;
+    destinationPolicy.guard = () => true;
+    await assert.rejects(new CalDAV({ url, owner: 'bob' }).request('PROPFIND', url, { depth: 0 }), (e) => e.status === 403 && /inside the network/.test(e.message));
+    // Unguarded (admins), and the guarded path's response handling, still work.
+    destinationPolicy.guard = () => false;
+    assert.equal((await new CalDAV({ url }).request('PROPFIND', url, { depth: 0 })).status, 207);
+  } finally { Object.assign(destinationPolicy, saved); srv.close(); }
+});

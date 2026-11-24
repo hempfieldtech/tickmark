@@ -845,7 +845,34 @@ test('with several users, only admins can point CalDAV inside the network', asyn
     assert.equal((await bob.call('POST', '/api/caldav/calendars', { url: 'http://10.0.0.1/dav/', name: 'x' })).status, 403);
     const a = await alex.call('POST', '/api/caldav/discover', { url: 'http://127.0.0.1:1/dav/' });
     assert.equal(a.status, 502, 'an admin gets through (and here finds nothing listening)');
+    for (const url of ['http://[::ffff:127.0.0.1]:1/dav/', 'http://[::ffff:7f00:1]:1/', 'http://[::127.0.0.1]:1/', 'http://[64:ff9b::7f00:1]:1/', 'http://[2002:7f00:1::]:1/']) {
+      assert.equal((await bob.call('POST', '/api/caldav/discover', { url })).status, 403, url);
+    }
   } finally { await srv.stop(); }
+});
+
+test("a saved CalDAV password is only sent to that account's own server", async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault') });
+  const seen = [];
+  const dav = http.createServer((req, res) => { seen.push(req.headers.authorization || ''); res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="x"' }).end(); });
+  await new Promise((r) => dav.listen(0, '127.0.0.1', r));
+  const { call } = client(srv.base);
+  try {
+    const home = `http://127.0.0.1:${dav.address().port}/dav/`;
+    const cfg = (await call('PUT', '/api/config', { accounts: [{ url: home, username: 'alex', password: 'real secret', itemTags: 'task' }] })).data;
+    const id = cfg.accounts[0].id;
+    // Another server: refused before anything is sent.
+    const r = await call('POST', '/api/caldav/discover', { accountId: id, url: `http://localhost:${dav.address().port}/elsewhere/` });
+    assert.equal(r.status, 400);
+    assert.match(r.data.error, /enter the password/);
+    assert.ok(!seen.some((a) => a.includes(Buffer.from('alex:real secret').toString('base64'))), 'the password never left');
+    // Its own server (another path on it): the saved password is used.
+    await call('POST', '/api/caldav/discover', { accountId: id, url: home + 'other/' });
+    assert.ok(seen.includes('Basic ' + Buffer.from('alex:real secret').toString('base64')));
+    // A password typed in goes wherever the user points it.
+    assert.notEqual((await call('POST', '/api/caldav/discover', { accountId: id, url: `http://localhost:${dav.address().port}/x/`, password: 'typed' })).status, 400);
+  } finally { await srv.stop(); dav.close(); }
 });
 
 test('removing a public link, or making it read-only, ends its open live pages', async () => {

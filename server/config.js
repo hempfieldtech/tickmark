@@ -44,6 +44,9 @@ export function cleanThemes(list) {
   });
 }
 
+/** Sync intervals in minutes: 0 is off, anything else at least 1 (a tiny one would flood the CalDAV server). */
+export const syncMinutes = (v) => { const n = Number(v) || 0; return n <= 0 ? 0 : Math.min(Math.max(1, n), 7 * 24 * 60); };
+
 const tagList = (v) => [...new Set((typeof v === 'string' ? v.split(/[,\s]+/) : v || [])
   .map((t) => String(t).replace(/^#/, '').trim().toLowerCase()).filter(Boolean))];
 
@@ -90,6 +93,7 @@ export class Config {
     }
     const m = migrate(saved);
     this.data = { ...DEFAULTS, ...m, accounts: (m.accounts || []).map((a) => ({ ...ACCOUNT_DEFAULTS, ...a })) };
+    for (const k of ['serverSyncMinutes', 'clientSyncMinutes']) this.data[k] = syncMinutes(this.data[k]); // older saves had no floor
     if (m !== saved || rewrite) this.write();
   }
 
@@ -152,7 +156,7 @@ export class Config {
       if (dup) throw Object.assign(new Error(`Two accounts use the same inbox note (${dup}). Give each its own.`), { status: 400 });
     }
     for (const k of ['serverSyncMinutes', 'clientSyncMinutes']) {
-      if (patch[k] !== undefined) next[k] = Math.max(0, Number(patch[k]) || 0);
+      if (patch[k] !== undefined) next[k] = syncMinutes(patch[k]);
     }
     if (patch.customCss !== undefined) {
       const css = String(patch.customCss ?? '');
