@@ -1,7 +1,7 @@
 // A public link (/s/<token>, or /s/<token>/<note in the shared folder>): read-only, or, when the owner
 // allows it, editable (checkboxes in the page, and Edit for the note's markdown).
 import { marked } from './vendor/marked.esm.js';
-import { checkboxLines, toggleLine } from './shared/tasks.js';
+import { checkboxLines, toggleLine, openSubtasks } from './shared/tasks.js';
 import { highlight } from './shared/highlight.js';
 import { safeUrl } from './shared/url.js';
 import { cleanHtml, OWN } from './shared/html.js';
@@ -213,7 +213,11 @@ $('#doc').addEventListener('click', (e) => {
   if (!cb) return;
   e.preventDefault();
   if (!doc.edit || cb.dataset.line === '') return;
-  doc.content = toggleLine(doc.content, Number(cb.dataset.line));
+  const line = Number(cb.dataset.line);
+  // Same rule as the app: an item with unchecked sub-items can't be checked yet.
+  const open = /\[[ /]\]/.test(doc.content.split('\n')[line] || '') && openSubtasks(doc.content, line);
+  if (open) return status(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`, true);
+  doc.content = toggleLine(doc.content, line);
   render(doc.content, doc.name);
   savePub();
 });

@@ -472,7 +472,7 @@ function setTaskStateFiled(text, lineNo, ch) {
   if (finishing && ch !== '-') return toggleTask(text, lineNo); // a normal check: date, recurrence, filing
   if (finishing) {
     const open = openSubtasks(text, lineNo);
-    if (open && parseTasks(text, tagOpts()).some((t) => t.line === lineNo && t.synced)) { toast(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`); return text; }
+    if (open) { toast(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`); return text; }
   }
   const next = setTaskState(text, lineNo, ch);
   // Filed again when it opens, finishes, or switches between done and cancelled (Complete ⇄ Cancelled).
@@ -483,10 +483,10 @@ function setTaskStateFiled(text, lineNo, ch) {
 
 /** Check or uncheck an item; with "move completed" on, it also moves under/out of the "Complete" heading. */
 function toggleTask(text, lineNo) {
-  // A synced task can't be checked while it has unchecked sub-items.
+  // An item (synced or not) can't be checked while it has unchecked sub-items.
   if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ /]\]/.test(text.split('\n')[lineNo] || '')) {
     const open = openSubtasks(text, lineNo);
-    if (open && parseTasks(text, tagOpts()).some((t) => t.line === lineNo && t.synced)) {
+    if (open) {
       toast(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`);
       return text;
     }
