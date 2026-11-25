@@ -7,6 +7,7 @@ import { highlight } from './shared/highlight.js';
 import { safeUrl } from './shared/url.js';
 import { cleanHtml, OWN } from './shared/html.js';
 import { Vim } from './vim.js';
+import { installFolds } from './editor-folds.js';
 import { textMirror, caretXY, lineCol, hue, cursorsHTML } from './shared/caret.js';
 
 // ---------------------------------------------------------------- utilities
@@ -73,7 +74,11 @@ const S = {
   sync: { state: 'idle' },
   lastSyncAt: 0,
   me: null, // { mode: 'single' } or { mode: 'multi', user, localLogin, sso }
+  sel: new Set(), // selected rows in the file tree: 'f:<note path>' / 'd:<folder path>'
+  selecting: false, // selection mode (from a row's menu): plain clicks select
 };
+// Folding headings in the editor (editor-folds.js): el.editor.value and its selection stay the real text.
+const folds = installFolds(el.editor, { store, path: () => S.path, onChange: () => { renderGutter(); renderCursors(); } });
 const tagOpts = () => ({ itemTags: S.config?.itemTags || ['task'], sectionTags: S.config?.sectionTags || ['sync'] });
 const syncConfigured = () => !!S.config?.accounts?.some((a) => a.url && a.calendarUrl);
 
@@ -500,6 +505,8 @@ function applyEdit(text) {
 
 function replaceRange(start, end, text) {
   const ed = el.editor;
+  // An edit that reaches into a folded section opens it instead, so nothing changes out of sight.
+  if (folds.touches(start, end)) { toast('Opened the folded section'); return; }
   ed.focus();
   ed.setSelectionRange(start, end);
   const ok = text ? document.execCommand('insertText', false, text) : document.execCommand('delete');
@@ -673,6 +680,9 @@ el.editor.addEventListener('keydown', (e) => {
     const out = block.split('\n').map((l) => (e.shiftKey ? l.replace(/^(\t| {1,4})/, '') : '\t' + l)).join('\n');
     replaceRange(ls, le, out);
     ed.setSelectionRange(s === se ? Math.max(ls, s + out.length - block.length) : ls, s === se ? Math.max(ls, s + out.length - block.length) : ls + out.length);
+  } else if (mod && e.shiftKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
+    e.preventDefault(); // fold / open the section the caret is in
+    folds.atCaret(e.code === 'BracketLeft');
   } else if (mod && e.key.toLowerCase() === 'l') {
     e.preventDefault();
     const { selectionStart: s, value: v } = ed;
@@ -730,28 +740,43 @@ document.addEventListener('keydown', (e) => {
 });
 function renderGutter() {
   const ed = el.editor;
-  if (!S.lineNumbers || S.mode !== 'note' || effectiveView() === 'read' || ed.hidden) { gutter.hidden = true; return; }
+  if (S.mode !== 'note' || effectiveView() === 'read' || ed.hidden) { gutter.hidden = true; return; }
+  // Line numbers (if on) and a fold arrow beside each heading that has something under it.
+  const info = folds.lines();
+  if (!S.lineNumbers && !info.some((x) => x.key)) { gutter.hidden = true; return; }
   gutter.hidden = false;
+  gutter.classList.toggle('arrows-only', !S.lineNumbers);
   const cs = getComputedStyle(ed), m = textMirror(ed);
-  const lines = ed.value.split('\n');
+  const lines = folds.display().split('\n');
   m.innerHTML = lines.map((l) => `<div>${esc(l) || ' '}</div>`).join('');
   const heights = [...m.children].map((d) => d.offsetHeight);
   m.textContent = '';
-  const padL = parseFloat(cs.paddingLeft), W = 44;
-  Object.assign(gutter.style, { top: ed.offsetTop + 'px', left: Math.max(0, ed.offsetLeft + padL - W - 14) + 'px', width: W + 'px', height: ed.clientHeight + 'px' });
+  const padL = parseFloat(cs.paddingLeft), W = S.lineNumbers ? 44 : 14;
+  Object.assign(gutter.style, { top: ed.offsetTop + 'px', left: Math.max(0, ed.offsetLeft + padL - W - (S.lineNumbers ? 14 : 2)) + 'px', width: W + 'px', height: ed.clientHeight + 'px' });
   gutterIn.style.paddingTop = cs.paddingTop;
   gutterIn.style.lineHeight = cs.lineHeight;
-  gutterIn.innerHTML = heights.map((h, i) => `<div style="height:${h}px">${i + 1}</div>`).join('');
+  gutterIn.innerHTML = heights.map((h, i) => {
+    const x = info[i] || {};
+    const arrow = x.key ? `<button class="fold-btn" data-key="${esc(x.key)}" aria-label="${x.fold === 'closed' ? 'Unfold' : 'Fold'} section" title="${x.fold === 'closed' ? 'Unfold' : 'Fold'} (Ctrl+Shift+${x.fold === 'closed' ? ']' : '['})">${x.fold === 'closed' ? '▸' : '▾'}</button>` : '';
+    const num = !S.lineNumbers ? '' : x.fold === 'hidden' ? '⋯' : x.n + 1;
+    return `<div style="height:${h}px"${x.fold === 'closed' ? ' class="folded"' : ''}>${arrow}${num}</div>`;
+  }).join('');
   gutterIn.style.transform = `translateY(${-ed.scrollTop}px)`;
   markGutterLine();
 }
 function markGutterLine() {
   if (gutter.hidden) return;
-  const ln = el.editor.value.slice(0, el.editor.selectionStart).split('\n').length - 1;
+  const ln = folds.displayLine();
   gutterIn.querySelector('.cur')?.classList.remove('cur');
   gutterIn.children[ln]?.classList.add('cur');
 }
 const scheduleGutter = debounce(renderGutter, 120);
+gutter.addEventListener('mousedown', (e) => { // mousedown, so the editor keeps the caret and focus
+  const b = e.target.closest('.fold-btn');
+  if (!b) return;
+  e.preventDefault();
+  folds.toggle(b.dataset.key);
+});
 el.editor.addEventListener('scroll', () => { if (!gutter.hidden) gutterIn.style.transform = `translateY(${-el.editor.scrollTop}px)`; renderCursorsSoon(); });
 el.editor.addEventListener('input', () => { scheduleGutter(); renderCursorsSoon(); });
 document.addEventListener('selectionchange', () => { if (document.activeElement === el.editor) markGutterLine(); });
@@ -780,6 +805,9 @@ const vim = new Vim(el.editor, {
   caretTop: (p) => caretXY(el.editor, p).top,
   lineHeight: () => parseFloat(getComputedStyle(el.editor).lineHeight) || 24,
   setOption: (k, v) => { if (k === 'number') setLineNumbers(v); },
+  stepLine: (ln, d) => folds.step(ln, d),
+  foldedAt: (p) => folds.foldedAt(p),
+  fold: (z) => (z === 'M' || z === 'R' ? folds.all(z === 'M') : folds.atCaret(z === 'a' ? undefined : z === 'c')),
 });
 S.vim = !!store.get('vim', false);
 if (S.vim) vim.enable();
@@ -1243,14 +1271,17 @@ function renderTree() {
     let out = '';
     for (const [name, f] of [...n.folders].sort((a, b) => cmp(a[0], b[0]))) {
       const isOpen = S.openFolders.has(f.path);
-      out += `<div class="t-row folder${isOpen ? ' open' : ''}" data-folder="${esc(f.path)}" draggable="true">${CHEV}<span class="name">${esc(name)}</span>${MORE}</div>`;
+      out += `<div class="t-row folder${isOpen ? ' open' : ''}${S.sel.has('d:' + f.path) ? ' selected' : ''}" data-folder="${esc(f.path)}" draggable="true">${CHEV}<span class="name">${esc(name)}</span>${MORE}</div>`;
       if (isOpen) out += `<div class="t-children">${html(f)}</div>`;
     }
     for (const f of n.files.sort((a, b) => cmp(a.path, b.path))) {
-      out += `<div class="t-row file${f.path === S.path && S.mode === 'note' ? ' active' : ''}" data-path="${esc(f.path)}" draggable="true">${FILE_ICON}<span class="name">${esc(basename(f.path))}</span>${MORE}</div>`;
+      out += `<div class="t-row file${f.path === S.path && S.mode === 'note' ? ' active' : ''}${S.sel.has('f:' + f.path) ? ' selected' : ''}" data-path="${esc(f.path)}" draggable="true">${FILE_ICON}<span class="name">${esc(basename(f.path))}</span>${MORE}</div>`;
     }
     return out;
   };
+  // Drop selected rows that no longer exist (moved, deleted elsewhere).
+  for (const k of S.sel) if (!(k[0] === 'f' ? S.files.some((f) => f.path === k.slice(2)) : S.folders.includes(k.slice(2)))) S.sel.delete(k);
+  renderSelBar();
   el.tree.innerHTML = html(buildTree()) || '<p class="note" style="padding:8px">No notes yet. Use the new note button on the Vault row to create one.</p>';
 }
 
@@ -1258,6 +1289,11 @@ el.tree.addEventListener('click', (e) => {
   const row = e.target.closest('.t-row');
   if (!row) return;
   if (e.target.closest('.t-more')) { e.stopPropagation(); return treeMenu(row, e.target.closest('.t-more')); }
+  // Ctrl/Cmd+click picks rows one by one, Shift+click a run of them; in selection mode a plain click does too.
+  if (e.shiftKey && selAnchor) { selectRange(selAnchor, rowKey(row)); return; }
+  if (e.ctrlKey || e.metaKey || S.selecting) { toggleSel(row); return; }
+  if (S.sel.size) clearSel();
+  selAnchor = rowKey(row);
   if (row.dataset.folder != null) {
     const p = row.dataset.folder;
     S.openFolders.has(p) ? S.openFolders.delete(p) : S.openFolders.add(p);
@@ -1273,6 +1309,7 @@ el.tree.addEventListener('contextmenu', (e) => {
 });
 
 function treeMenu(row, anchor) {
+  if (S.sel.size > 1 && S.sel.has(rowKey(row))) return showMenu(anchor, selMenuItems());
   const folder = row.dataset.folder;
   const path = folder ?? row.dataset.path;
   const items = [];
@@ -1282,6 +1319,7 @@ function treeMenu(row, anchor) {
     items.push({ label: 'New note here', run: () => newNote(folder) });
   }
   items.push({ label: 'Rename…', run: () => renamePath(path, folder != null) });
+  items.push({ label: 'Select', run: () => { S.selecting = true; if (!S.sel.has(rowKey(row))) toggleSel(row); else renderTree(); } });
   items.push({ label: 'Share…', demoOff: true, run: () => openShare(path, folder != null) });
   items.push({ label: 'Move to trash', danger: true, run: () => trashPath(path, folder != null) });
   showMenu(anchor, items);
@@ -1289,9 +1327,11 @@ function treeMenu(row, anchor) {
 
 // drag & drop to move notes/folders between folders
 let dragPath = null;
+let dragMany = null; // dragging a selected row drags the whole selection
 el.tree.addEventListener('dragstart', (e) => {
   const row = e.target.closest('.t-row');
   dragPath = row?.dataset.folder ?? row?.dataset.path ?? null;
+  dragMany = row && S.sel.size > 1 && S.sel.has(rowKey(row)) ? selPaths() : null;
   e.dataTransfer.effectAllowed = 'move';
 });
 el.tree.addEventListener('dragover', (e) => {
@@ -1306,13 +1346,14 @@ el.tree.addEventListener('drop', async (e) => {
   el.tree.querySelectorAll('.drop').forEach((r) => r.classList.remove('drop'));
   el.tree.classList.remove('drop');
   const target = e.target.closest('.t-row.folder')?.dataset.folder ?? '';
-  const from = dragPath;
-  dragPath = null;
+  const from = dragPath, many = dragMany;
+  dragPath = null; dragMany = null;
+  if (many) return moveMany(many, target);
   if (!from || dirname(from) === target || target === from || target.startsWith(from + '/')) return;
   await movePath(from, joinPath(target, from.split('/').pop()));
 });
 
-async function movePath(from, to) {
+async function movePath(from, to, { reload = true } = {}) {
   try {
     await flushSave();
     const r = await api('POST', '/api/rename', { from, to });
@@ -1325,9 +1366,95 @@ async function movePath(from, to) {
       el.crumbs.textContent = dirname(S.path) ? dirname(S.path).replaceAll('/', ' / ') + ' /' : '';
     }
     if (r.updated?.includes(S.path)) reloadIfClean();
-    await loadTree();
-  } catch (e) { toast(e.message); }
+    if (reload) await loadTree();
+    return true;
+  } catch (e) { toast(e.message); return false; }
 }
+
+// ---- several notes and folders at once (multi-select in the file tree)
+let selAnchor = null;
+const rowKey = (row) => (row.dataset.folder != null ? 'd:' + row.dataset.folder : 'f:' + row.dataset.path);
+/** Selected paths as [{ path, isFolder }], leaving out anything inside a selected folder (it goes with it). */
+function selPaths() {
+  const all = [...S.sel].map((k) => ({ path: k.slice(2), isFolder: k[0] === 'd' }));
+  return all.filter((x) => !all.some((y) => y.isFolder && y !== x && x.path.startsWith(y.path + '/')));
+}
+function toggleSel(row) {
+  const k = rowKey(row);
+  if (S.sel.has(k)) S.sel.delete(k); else S.sel.add(k);
+  selAnchor = k;
+  renderTree();
+}
+function selectRange(a, b) {
+  const keys = [...el.tree.querySelectorAll('.t-row')].map(rowKey);
+  let i = keys.indexOf(a), j = keys.indexOf(b);
+  if (i < 0 || j < 0) return;
+  if (i > j) [i, j] = [j, i];
+  for (const k of keys.slice(i, j + 1)) S.sel.add(k);
+  renderTree();
+}
+function clearSel() { S.sel.clear(); S.selecting = false; selAnchor = null; renderTree(); }
+const selLabel = () => { const n = selPaths().length; return `${n} item${n === 1 ? '' : 's'}`; };
+const selMenuItems = () => [
+  { label: `Move ${selLabel()} to folder…`, run: () => moveSelTo() },
+  { label: 'Clear selection', run: () => clearSel() },
+  { label: `Move ${selLabel()} to trash`, danger: true, run: () => trashMany(selPaths()) },
+];
+function renderSelBar() {
+  const bar = $('#sel-bar');
+  const n = S.sel.size;
+  bar.hidden = !n && !S.selecting;
+  if (bar.hidden) return;
+  bar.querySelector('.sel-count').textContent = n ? `${selPaths().length} selected` : 'Tap to select';
+  bar.querySelectorAll('.sel-act').forEach((b) => (b.disabled = !n));
+}
+async function moveSelTo() {
+  const items = selPaths();
+  if (!items.length) return;
+  const dest = await ask(`Move ${selLabel()} to folder (blank = vault root)`, '');
+  if (dest === null) return;
+  await moveMany(items, dest.replace(/^\/+|\/+$/g, ''));
+}
+async function moveMany(items, dir) {
+  let moved = 0;
+  for (const { path } of items) {
+    if (dirname(path) === dir) continue;
+    if (dir === path || dir.startsWith(path + '/')) { toast(`“${path}” can't go inside itself`); continue; }
+    if (await movePath(path, joinPath(dir, path.split('/').pop()), { reload: false })) moved++;
+  }
+  S.sel.clear(); S.selecting = false;
+  if (dir) { S.openFolders.add(dir); store.set('openFolders', [...S.openFolders]); }
+  await loadTree();
+  if (moved) toast(`Moved ${moved} item${moved === 1 ? '' : 's'}`);
+}
+async function trashMany(items) {
+  if (!items.length) return;
+  const names = items.slice(0, 5).map((x) => `“${x.isFolder ? x.path : basename(x.path)}”`).join(', ') + (items.length > 5 ? ` and ${items.length - 5} more` : '');
+  if (!confirm(`Move ${items.length} item${items.length === 1 ? '' : 's'} (${names}) to the vault's .trash folder?`)) return;
+  let done = 0;
+  for (const { path } of items) {
+    try {
+      await api('DELETE', `/api/file?path=${enc(path)}`);
+      done++;
+      if (S.path === path || S.path?.startsWith(path + '/')) {
+        S.path = null; S.mode = 'empty'; el.title.value = ''; el.crumbs.textContent = '';
+        store.del(pendingKey(path));
+        applyView(); updateSaveState();
+      }
+    } catch (e) { toast(`${basename(path)}: ${e.message}`); }
+  }
+  S.sel.clear(); S.selecting = false;
+  await loadTree();
+  if (done) toast(`Moved ${done} item${done === 1 ? '' : 's'} to the trash`, { label: 'Open Trash', run: openTrash });
+}
+$('#sel-bar .sel-move').onclick = () => moveSelTo();
+$('#sel-bar .sel-trash').onclick = () => trashMany(selPaths());
+$('#sel-bar .sel-done').onclick = () => clearSel();
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented || (!S.sel.size && !S.selecting) || document.querySelector('dialog[open]')) return;
+  if (document.activeElement === el.editor) return;
+  clearSel();
+});
 
 async function moveToFolder(path) {
   const dest = await ask('Move to folder (blank = vault root)', dirname(path));
@@ -1560,6 +1687,11 @@ function commands() {
     { id: 'view-expand', label: 'View: Expand all folders', run: () => toggleAllFolders(true) },
     { id: 'editor-vim', label: `Editor: ${S.vim ? 'Turn off' : 'Turn on'} Vim mode`, run: () => { setVim(!S.vim); toast(`Vim mode ${S.vim ? 'on' : 'off'}`); } },
     { id: 'editor-lines', label: `Editor: ${S.lineNumbers ? 'Hide' : 'Show'} line numbers`, run: () => setLineNumbers(!S.lineNumbers) },
+    ...(note ? [
+      { id: 'fold-here', label: 'Editor: Fold or unfold the section at the cursor', hint: 'Ctrl+Shift+[', run: () => { el.editor.focus(); folds.atCaret(); } },
+      { id: 'fold-all', label: 'Editor: Fold all headings', run: () => folds.all(true) },
+      { id: 'unfold-all', label: 'Editor: Unfold all headings', run: () => folds.all(false) },
+    ] : []),
     { id: 'editor-zen', label: `Editor: ${S.zen ? 'Leave' : 'Enter'} zen mode`, hint: 'Ctrl+Shift+Enter', run: () => setZen(!S.zen) },
     { id: 'sync-now', label: 'Sync: Sync now', run: () => runSync({ manual: true }) },
     ...(S.config?.accounts || []).filter((a) => a.id).map((a) => ({ id: 'sync-log-' + a.id, label: `Sync: History of ${a.name}…`, run: () => openSyncLog(a.id, a.name) })),
@@ -1612,6 +1744,14 @@ function relTime(iso) {
   return new Date(iso).toLocaleDateString();
 }
 function renderSync() {
+  renderSyncButton();
+  // The bottom bar's copy (desktop, sidebar hidden: see style.css) shows the same.
+  const mini = $('#wc-sync');
+  mini.className = el.sync.className;
+  mini.querySelector('.label').textContent = el.sync.querySelector('.label').textContent;
+  mini.title = el.sync.title;
+}
+function renderSyncButton() {
   const b = el.sync, st = S.sync;
   b.className = 'sync-btn';
   const label = b.querySelector('.label');
@@ -1628,6 +1768,8 @@ function renderSync() {
   b.title += '\n\n' + nextSyncText();
 }
 el.sync.addEventListener('mouseenter', renderSync); // so the countdown is current when the tooltip shows
+$('#wc-sync').addEventListener('mouseenter', renderSync);
+$('#wc-sync').onclick = (e) => el.sync.onclick(e);
 setInterval(renderSync, 30000);
 
 async function runSync({ manual = false, force = false } = {}) {
@@ -2255,7 +2397,8 @@ const KEYMAP = [
   { group: 'Notes and navigation', items: [
     ['Ctrl+P', 'Jump to a note (quick switcher); type a new name to create it'], ['Ctrl+O', 'Jump to a note'],
     ['Ctrl+Shift+P', 'Command palette: every action by name, and notes to open'], ['F1', 'Command palette'],
-    ['Ctrl+N', 'New note'], ['Ctrl+Shift+F', 'Search the text of all notes'], ['Ctrl+S', 'Save now (it also saves by itself)'],
+    ['Ctrl+N', 'New note'], ['Ctrl+Shift+F', 'Search the text of all notes'],
+    ['Ctrl+Click', 'In the file tree: select several notes and folders (Shift+Click selects a run of them; Esc clears)'], ['Ctrl+S', 'Save now (it also saves by itself)'],
   ] },
   { group: 'Views and panels', items: [
     ['Ctrl+E', 'Switch between Source, Split and Preview'], ['Ctrl+\\', 'Show or hide the sidebar'], ['Ctrl+Shift+Enter', 'Zen mode on or off (Esc also leaves it)'],
@@ -2265,6 +2408,8 @@ const KEYMAP = [
     ['Enter', 'Continue a list or checklist; on an empty item, end the list'],
     ['Tab', 'Indent the list item (or the selected lines)'], ['Shift+Tab', 'Outdent the list item (or the selected lines)'],
     ['[[', 'Link to a note: suggestions appear; ↑ ↓ to pick, Enter or Tab to insert, Esc to close'],
+    ['Ctrl+Shift+[', 'Fold the section the cursor is in (its heading stays; the rest becomes one ⋯ line)'],
+    ['Ctrl+Shift+]', 'Unfold it again (so do clicking the ⋯ line, typing on it, or the arrow beside the heading)'],
     [':cal', 'Shortcodes as you type: :calendar: :tomorrow: :nextweek: :recur: :highest: :high: :medium: :low: :lowest: :done:'],
   ] },
   { group: 'Checklists', items: [
@@ -2286,7 +2431,7 @@ const KEYMAP = [
     ['r R ~ J gJ', 'Replace a character, replace mode, toggle case, join lines'], ['g~ gu gU', 'Toggle/lower/upper case with a motion'],
     ['u Ctrl+R .', 'Undo, redo, repeat the last change'], ['v V gv o', 'Visual and visual-line mode, reselect, other end'],
     ['m{a-z} \'{a-z} `{a-z}', 'Set a mark, jump to its line or its exact place'], ['Ctrl+D Ctrl+U Ctrl+F Ctrl+B', 'Half page / page down and up'],
-    ['Ctrl+E Ctrl+Y zz zt zb', 'Scroll a line, centre/top/bottom the cursor'], ['Ctrl+A Ctrl+X', 'Add to / subtract from the number at the cursor'],
+    ['Ctrl+E Ctrl+Y zz zt zb', 'Scroll a line, centre/top/bottom the cursor'], ['za zc zo zM zR', 'Fold: toggle, close, open the section; close all, open all'], ['Ctrl+A Ctrl+X', 'Add to / subtract from the number at the cursor'],
     [':w :q :wq :x ZZ', 'Save and sync, close the note, both'], [':s/a/b/g :%s :\'<,\'>s', 'Substitute on the line, the note, the selection'],
     [':d :y :sort :noh', 'Delete or yank lines, sort them, clear the search'], [':set nu :set nonu', 'Line numbers on or off'], [':e Name', 'Open (or create) a note'],
   ] },

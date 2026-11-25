@@ -8,7 +8,7 @@
 // n N * # / ? ' ` m · operators d c y > < g~ gu gU with any motion or text object (iw aw iW aW
 // i" a" i' a' i` a` i( a( ib ab i[ a[ i{ a{ iB aB i< a< ip ap) and doubled (dd cc yy >> << g~~ guu gUU)
 // x X s S D C Y p P J gJ r ~ u Ctrl-R . i a I A o O gi R v V gv o (in visual) Ctrl-A Ctrl-X
-// Ctrl-D Ctrl-U Ctrl-F Ctrl-B Ctrl-E Ctrl-Y zz zt zb ZZ ZQ, registers ("a-"z, "0, "_ and "+ for
+// Ctrl-D Ctrl-U Ctrl-F Ctrl-B Ctrl-E Ctrl-Y zz zt zb za zc zo zM zR ZZ ZQ, registers ("a-"z, "0, "_ and "+ for
 // the clipboard), and : commands (:w :q :wq :x :{line} :$ :s :%s :'<,'>s :d :y :sort :noh
 // :set nu / nonu :e {note} :help).
 
@@ -196,15 +196,17 @@ export class Vim {
     const v = this.v, N = v.length, c = n || 1;
     const lines = (d) => {
       const ln = this.lineNo(p), last = this.lineCount() - 1;
-      const t = Math.max(0, Math.min(last, ln + d));
+      let t = ln + d;
+      if (this.h.stepLine) { t = ln; for (let k = 0; k < Math.abs(d); k++) t = this.h.stepLine(t, Math.sign(d)); } // a fold is one line
+      t = Math.max(0, Math.min(last, t));
       if (this.want == null) this.want = this.col(p);
       return this.lineAt(t);
     };
     switch (k) {
       case 'h': case '<Left>': case '<BS>': return { to: Math.max(this.ls(p), p - c) };
       case 'l': case '<Right>': case ' ': return { to: Math.min(forOp ? this.le(p) : this.lastCh(p), p + c) };
-      case 'j': case '<Down>': case '<C-n>': { const s = lines(c); return { to: this.atCol(s, this.want === Infinity ? 1e9 : this.want), linewise: true, keepWant: true }; }
-      case 'k': case '<Up>': case '<C-p>': { const s = lines(-c); return { to: this.atCol(s, this.want === Infinity ? 1e9 : this.want), linewise: true, keepWant: true }; }
+      case 'j': case '<Down>': case '<C-n>': { const s = lines(c); if (this.h.foldedAt?.(s)) return { to: s, linewise: true, keepWant: true }; return { to: this.atCol(s, this.want === Infinity ? 1e9 : this.want), linewise: true, keepWant: true }; }
+      case 'k': case '<Up>': case '<C-p>': { const s = lines(-c); if (this.h.foldedAt?.(s)) return { to: s, linewise: true, keepWant: true }; return { to: this.atCol(s, this.want === Infinity ? 1e9 : this.want), linewise: true, keepWant: true }; }
       case '+': case '<CR>': return { to: this.fnb(lines(c)), linewise: true };
       case '-': return { to: this.fnb(lines(-c)), linewise: true };
       case '_': return { to: this.fnb(lines(c - 1)), linewise: true };
@@ -606,6 +608,8 @@ export class Vim {
       case '/': case '?': this.searchPrompt(k); return;
       case 'z': {
         const z = need();
+        // Folds: za toggles the section the cursor is in, zc / zo close / open it, zM / zR all of them.
+        if (this.h.fold && 'acoMR'.includes(z) && z.length === 1) { this.h.fold(z); this.toNormal(this.ta.selectionStart); return; }
         const top = this.h.caretTop?.(p) ?? 0, ta = this.ta, lh = this.h.lineHeight?.() || 24;
         if (z === 'z' || z === '.') ta.scrollTop = Math.max(0, top - ta.clientHeight / 2 + lh / 2);
         else if (z === 't' || z === '<CR>') ta.scrollTop = Math.max(0, top - lh);

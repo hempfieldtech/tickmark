@@ -37,6 +37,7 @@
               <svg viewBox="0 0 24 24"><path d="M8 4h11a1 1 0 0 1 1 1v11"/><rect x="4" y="8" width="12" height="12" rx="1"/><path d="M7.5 14h5"/><path class="plus" d="M10 11.5v5"/></svg></button>
           </span>
         </div>
+        <div id="sel-bar" hidden><span class="sel-count"></span><button class="sel-act sel-move" type="button">Move…</button><button class="sel-act sel-trash" type="button">Trash</button><button class="sel-done" type="button">Done</button></div>
         <div id="tree" role="tree"></div>
       </div>
       <div id="search-results" hidden></div>
@@ -97,6 +98,7 @@
         <span id="wc-lines" hidden></span>
         <span id="wc-tasks" hidden></span>
         <button type="button" id="wc-share" hidden></button>
+        <button type="button" id="wc-sync" class="sync-btn"><span class="dot"></span><span class="label"></span></button>
         <form id="vim-prompt" hidden><span class="vim-prefix"></span><input autocomplete="off" spellcheck="false" aria-label="Vim command"></form>
       </footer>
     </main>

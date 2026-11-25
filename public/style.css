@@ -172,6 +172,13 @@ kbd { font: 12px var(--mono); border: 1px solid var(--line); border-bottom-width
 .t-row { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 6px; cursor: pointer; color: var(--text); white-space: nowrap; user-select: none; position: relative; }
 .t-row:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
 .t-row.active { background: var(--accent-soft); color: var(--accent); }
+.t-row.selected { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+#sel-bar { display: flex; align-items: center; gap: 6px; margin: 2px 8px 4px; padding: 5px 6px 5px 10px; border-radius: 8px; background: var(--accent-soft); font-size: 12.5px; }
+#sel-bar[hidden] { display: none; }
+#sel-bar .sel-count { flex: 1; color: var(--accent); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#sel-bar button { border: 0; border-radius: 6px; padding: 3px 8px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+#sel-bar button:disabled { opacity: .45; cursor: default; }
+#sel-bar .sel-trash:not(:disabled) { color: var(--danger, #c0392b); }
 .t-row .name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .t-row .chev { width: 14px; height: 14px; color: var(--muted); transition: transform .12s; }
 .t-row.open .chev { transform: rotate(90deg); }
@@ -237,6 +244,10 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 #vim-prompt { flex: 1 1 100%; display: flex; align-items: center; font: 13px var(--mono); color: var(--text); order: 9; }
 #vim-prompt input { flex: 1; border: 0; outline: none; background: transparent; font: inherit; color: var(--text); padding: 2px 0; }
 #word-count[hidden] { display: none; }
+/* Sync status in the bottom bar, far right: only on a desktop with the sidebar hidden */
+#word-count #wc-sync { display: none; flex: none; margin-left: auto; padding: 1px 6px; font-size: 12px; }
+@media (min-width: 761px) { #app.no-sidebar #word-count #wc-sync { display: flex; } }
+#app.zen #word-count #wc-sync { display: none; }
 .view-edit #workspace, .view-read #workspace { grid-template-columns: 1fr; }
 .view-edit #preview-wrap, .view-read #editor { display: none !important; }
 .empty { grid-column: 1 / -1; display: grid; place-content: center; text-align: center; color: var(--muted); padding: 24px; }
@@ -251,6 +262,10 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 #gutter .gutter-in { text-align: right; font: 12px var(--mono); color: color-mix(in srgb, var(--muted) 70%, transparent); font-variant-numeric: tabular-nums; will-change: transform; }
 #gutter .gutter-in > div { overflow: hidden; }
 #gutter .gutter-in > .cur { color: var(--text); }
+/* Fold arrows beside headings (they show without line numbers too) */
+#gutter .fold-btn { pointer-events: auto; float: left; width: 14px; padding: 0; border: 0; background: none; color: var(--muted); font: 12px var(--sans); line-height: inherit; cursor: pointer; opacity: .6; }
+#gutter .fold-btn:hover, #gutter .folded .fold-btn { opacity: 1; color: var(--accent); }
+#gutter.arrows-only .gutter-in { text-align: left; }
 /* Other people's cursors (live collaboration) */
 #cursors { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
 .rcursor { position: absolute; width: 2px; background: hsl(var(--h, 200) 65% 50%); transition: top .12s, left .12s; }

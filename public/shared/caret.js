@@ -19,7 +19,8 @@ export function textMirror(ta) {
 /** Where a position in a textarea is: on screen (x, y), and from the top of its text (top, for scrolling). */
 export function caretXY(ta, pos) {
   const m = textMirror(ta);
-  m.textContent = ta.value.slice(0, pos);
+  // A folded editor (editor-folds.js) shows other text than its value: measure what's shown.
+  m.textContent = ta.folds ? ta.folds.display().slice(0, ta.folds.displayPos(pos)) : ta.value.slice(0, pos);
   const mark = document.createElement('span');
   mark.textContent = '​';
   m.append(mark);
