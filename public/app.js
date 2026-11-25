@@ -860,8 +860,9 @@ function updateSaveState(kind) {
   if (S.mode !== 'note') { s.textContent = ''; return; }
   if (kind === 'offline' || store.get(pendingKey(S.path))) { s.textContent = 'Offline: saved on this device'; s.className = 'warn'; }
   else if (kind === 'error') { s.textContent = 'Save failed'; s.className = 'err'; }
-  else if (S.saving) s.textContent = 'Saving…';
+  else if (S.saving) { s.textContent = 'Saving…'; s.className = 'saving'; }
   else s.textContent = savedLabel(S.savedAt);
+  s.title = s.textContent; // phones show just a ✓ (see style.css); tapping it says the rest
   s.title = S.savedAt && !s.className ? new Date(S.savedAt).toLocaleString() : '';
 }
 /** "Saved just now" / "Saved 5 min ago" / "Saved at 9:41 AM" / "Saved Nov 20": when the note last hit the disk. */
@@ -874,6 +875,7 @@ function savedLabel(t) {
   return `Saved ${d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() && { year: 'numeric' }) })}`;
 }
 setInterval(() => { if (!S.saving) updateSaveState(); }, 30000);
+el.saveState.addEventListener('click', () => { if (mobile.matches && el.saveState.textContent) toast(el.saveState.textContent); });
 
 // Typing saves once you pause (TYPING_PAUSE), the same pause sync waits for, and sync follows the
 // save. One write per pause means the file on disk and the editor don't trade half-typed versions

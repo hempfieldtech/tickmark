@@ -671,6 +671,12 @@ details.card[open] summary { margin-bottom: 4px; }
   #presence { flex: none; }
   #presence .pchip:nth-child(n+3):not(.watch) { display: none; }
   #save-state { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+  /* "Saved 5 min ago" would squeeze the note's name: phones show a ✓ (… while saving); tap it for the words.
+     Offline and failed saves keep their text, since those need noticing. */
+  #save-state:not(.warn):not(.err):not(:empty) { flex: none; font-size: 0; width: 22px; text-align: center; cursor: pointer; }
+  #save-state:not(.warn):not(.err):not(:empty)::before { content: '✓'; font-size: 14px; color: var(--muted); }
+  #save-state.saving::before { content: '…' !important; }
+  .title-wrap { margin-right: 2px; }
   #presence:not(:empty) ~ #save-state:not(.warn):not(.err) { display: none; } /* badges matter more than "Saved" */
   .seg button { padding: 4px 8px; }
 }
