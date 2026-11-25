@@ -7,3 +7,4 @@ contrib
 *.md
 !public/**/*.md
 !README.md
+!demo/**/*.md

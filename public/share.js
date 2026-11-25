@@ -4,6 +4,7 @@ import { marked } from './vendor/marked.esm.js';
 import { checkboxLines, toggleLine } from './shared/tasks.js';
 import { highlight } from './shared/highlight.js';
 import { safeUrl } from './shared/url.js';
+import { cleanHtml, OWN } from './shared/html.js';
 import { lineCol, cursorsHTML } from './shared/caret.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -25,8 +26,8 @@ const hrefFor = (file) => `${base}/${file.split('/').map(encodeURIComponent).joi
 marked.use({
   gfm: true,
   renderer: {
-    checkbox({ checked }) { return `<input type="checkbox" class="pub-cb"${checked ? ' checked' : ''}>`; },
-    html({ text }) { return esc(text); }, // raw HTML shows as text, never runs
+    checkbox({ checked }) { return `<input type="checkbox" class="pub-cb" data-own="${OWN}"${checked ? ' checked' : ''}>`; },
+    html({ text }) { return text; }, // the note's own HTML and CSS, cleaned by cleanHtml below
     link({ href, title: t, tokens }) {
       const text = this.parser.parseInline(tokens);
       if (!safeUrl(href)) return text;
@@ -83,7 +84,7 @@ function render(content, name) {
   const body = content.replace(/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, '');
   // Show the note's name as its title unless it starts with its own heading.
   const head = /^\s*#\s/.test(body) ? '' : `<h1 class="share-title">${esc(name)}</h1>`;
-  $('#doc').innerHTML = head + (body.trim() ? marked.parse(body) : '<p class="share-empty">This note is empty.</p>');
+  $('#doc').innerHTML = head + (body.trim() ? cleanHtml(marked.parse(body), '#doc') : '<p class="share-empty">This note is empty.</p>');
   // "[/] …" (in progress) and "[-] …" (cancelled) are checkboxes too, so they line up with the source lines.
   $('#doc').querySelectorAll('li').forEach((li) => {
     const host = li.firstChild?.nodeName === 'P' ? li.firstChild : li;

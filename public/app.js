@@ -5,6 +5,7 @@ import { textStats } from './shared/words.js';
 import { parseFrontmatter, writeFrontmatter } from './shared/frontmatter.js';
 import { highlight } from './shared/highlight.js';
 import { safeUrl } from './shared/url.js';
+import { cleanHtml, OWN } from './shared/html.js';
 import { Vim } from './vim.js';
 import { textMirror, caretXY, lineCol, hue, cursorsHTML } from './shared/caret.js';
 
@@ -16,6 +17,20 @@ const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = se
 // Per-user keys (notes cache, unsaved edits, settings) are namespaced by the signed-in user, so two
 // people sharing a browser never see, or save into, each other's notes. View prefs are per device.
 const DEVICE_KEYS = new Set(['view', 'noSidebar', 'vim', 'lineNumbers', 'zen', 'sideWidth']);
+// Theme and editor options are also saved on the server (config.prefs), so they follow you between devices
+// and survive a cleared cache; the copies in localStorage just make them apply before the server answers.
+let prefsFromServer = false;
+const prefQueue = {};
+const sendPrefs = debounce(() => {
+  const prefs = { ...prefQueue };
+  for (const k in prefQueue) delete prefQueue[k];
+  api('PUT', '/api/config', { prefs }).then((c) => { S.config = c; store.set('config', c); }).catch(() => Object.assign(prefQueue, prefs, { ...prefQueue }));
+}, 400);
+function savePref(k, v) {
+  if (prefsFromServer || !S.booted) return;
+  prefQueue[k] = v;
+  sendPrefs();
+}
 const store = {
   user: '',
   key(k) { return 'tickmark:' + (this.user && !DEVICE_KEYS.has(k) ? `u:${this.user}:` : '') + k; },
@@ -75,6 +90,7 @@ function toast(msg, action) {
 /** A menu of { label, run, danger } items. Destructive (danger) items always go last, after a divider.
  *  An item with `expand(button)` grows inside the menu instead of closing it. */
 function showMenu(anchor, items) {
+  items = items.filter((it) => !(it.demoOff && S.me?.demo)); // e.g. Share…: public links are off in the demo
   el.menu.innerHTML = '';
   el.menu.anchor = anchor;
   const safe = items.filter((it) => !it.danger), danger = items.filter((it) => it.danger);
@@ -123,9 +139,10 @@ const dueClass = (date) => (date < today() ? 'overdue' : date === today() ? 'tod
 marked.use({
   gfm: true,
   renderer: {
-    checkbox({ checked }) { return `<input type="checkbox" class="task-cb" data-i="${cbIndex++}"${checked ? ' checked' : ''}>`; },
-    // Raw HTML is shown as text: note content (including task titles synced in from CalDAV) is never executed.
-    html({ text }) { return esc(text); },
+    checkbox({ checked }) { return `<input type="checkbox" class="task-cb" data-own="${OWN}" data-i="${cbIndex++}"${checked ? ' checked' : ''}>`; },
+    // Raw HTML and <style> in a note render, after cleanHtml (shared/html.js) strips anything that could
+    // run code and scopes the CSS to the note. Every marked.parse() below goes through md().
+    html({ text }) { return text; },
     link({ href, title, tokens }) {
       const text = this.parser.parseInline(tokens);
       if (!safeUrl(href)) return text;
@@ -213,6 +230,9 @@ function drawStates(root) {
   });
 }
 
+/** Markdown to clean HTML for a container matching `scope`. */
+const md = (text, scope) => cleanHtml(marked.parse(text), scope);
+
 const SYNC_ICON = '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>';
 
 function renderPreview() {
@@ -225,7 +245,7 @@ function renderPreview() {
     head = '<div class="conflict-banner">This note has a merge conflict: edits made here and on disk touched the same lines. Keep the version you want and delete the <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> / <code>=======</code> / <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code> markers.</div>' + head;
   }
   cbIndex = 0;
-  el.preview.innerHTML = head + marked.parse(body);
+  el.preview.innerHTML = head + md(body, '#preview');
   // Markdown only knows [ ] and [x]: turn "[/] …" and "[-] …" list items into checkboxes too, then
   // number every checkbox in document order (the order checkboxLines() lists their source lines).
   drawStates(el.preview);
@@ -307,7 +327,7 @@ async function fillEmbeds(root, chain) {
       }
       if (S.path !== path0) return; // moved on to another note meanwhile
       const save = cbIndex;
-      body.innerHTML = marked.parse(text);
+      body.innerHTML = md(text, '#preview');
       cbIndex = save;
       // Checkboxes in an embed edit the other note's line (a click, or right-click for a state).
       drawStates(body);
@@ -680,6 +700,8 @@ S.lineNumbers = !!store.get('lineNumbers', false);
 function setLineNumbers(on) {
   S.lineNumbers = !!on;
   store.set('lineNumbers', S.lineNumbers);
+  savePref('lineNumbers', S.lineNumbers);
+  if ($('#opt-lines')) $('#opt-lines').checked = S.lineNumbers;
   el.app.classList.toggle('line-numbers', S.lineNumbers);
   renderGutter();
   renderWordCount();
@@ -691,6 +713,7 @@ S.zen = !!store.get('zen', false);
 function setZen(on) {
   S.zen = !!on;
   store.set('zen', S.zen);
+  savePref('zen', S.zen);
   el.app.classList.toggle('zen', S.zen);
   el.app.classList.remove('sidebar-open');
   if ($('#opt-zen')) $('#opt-zen').checked = S.zen;
@@ -741,10 +764,11 @@ function renderCursors() {
 }
 const renderCursorsSoon = (() => { let raf = 0; return () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderCursors); }; })();
 
-// ---- Vim mode (Settings → Editor, per device)
+// ---- Vim mode (Settings → Editor, saved on the server with your other prefs)
 const vim = new Vim(el.editor, {
   replace: (s0, e0, t) => replaceRange(s0, e0, t),
-  save: () => save(),
+  // :w saves and then syncs straight away (no waiting for the typing pause), like Sync now.
+  save: async () => { await save(); if (syncConfigured()) await runSync({ manual: true }); },
   quit: () => closeNote(),
   open: (name) => openLink(name),
   help: () => openKeys('vim'),
@@ -760,6 +784,8 @@ if (S.vim) vim.enable();
 function setVim(on) {
   S.vim = !!on;
   store.set('vim', S.vim);
+  savePref('vim', S.vim);
+  if ($('#opt-vim')) $('#opt-vim').checked = S.vim;
   if (S.vim) vim.enable(); else vim.disable();
   if (!S.vim) $('#vim-mode').hidden = true;
 }
@@ -1208,6 +1234,7 @@ const MORE = '<button class="icon-btn t-more" aria-label="Actions"><svg viewBox=
 const cmp = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
 
 function renderTree() {
+  renderCollapseBtn();
   const html = (n) => {
     let out = '';
     for (const [name, f] of [...n.folders].sort((a, b) => cmp(a[0], b[0]))) {
@@ -1251,7 +1278,7 @@ function treeMenu(row, anchor) {
     items.push({ label: 'New note here', run: () => newNote(folder) });
   }
   items.push({ label: 'Rename…', run: () => renamePath(path, folder != null) });
-  items.push({ label: 'Share…', run: () => openShare(path, folder != null) });
+  items.push({ label: 'Share…', demoOff: true, run: () => openShare(path, folder != null) });
   items.push({ label: 'Move to trash', danger: true, run: () => trashPath(path, folder != null) });
   showMenu(anchor, items);
 }
@@ -1362,7 +1389,23 @@ function setVaultOpen(open) {
   store.set('vaultOpen', open);
 }
 $('#vault-toggle').onclick = () => setVaultOpen(el.treePane.classList.contains('collapsed'));
-$('#btn-collapse-all').onclick = () => { S.openFolders.clear(); store.set('openFolders', []); renderTree(); };
+// Collapse every folder, or when they're all collapsed already, expand every one.
+function allFolders() {
+  const out = new Set(S.folders || []);
+  for (const f of S.files || []) for (let d = dirname(f.path); d; d = dirname(d)) out.add(d);
+  return [...out];
+}
+function toggleAllFolders(open = !S.openFolders.size) {
+  S.openFolders = new Set(open ? allFolders() : []);
+  store.set('openFolders', [...S.openFolders]);
+  renderTree();
+}
+function renderCollapseBtn() {
+  const b = $('#btn-collapse-all'), expand = !S.openFolders.size;
+  b.title = b.ariaLabel = expand ? 'Expand all folders' : 'Collapse all folders';
+  b.classList.toggle('expand', expand);
+}
+$('#btn-collapse-all').onclick = () => toggleAllFolders();
 setVaultOpen(store.get('vaultOpen', true) !== false);
 
 // rename via the title field
@@ -1388,7 +1431,7 @@ $('#btn-more').onclick = (e) => {
     { label: 'Deleted tasks…', run: () => openDeleted({ path: S.path }) },
     { label: 'History…', run: () => openHistory() },
     { label: 'Properties…', run: () => openProps() },
-    { label: 'Share…', run: () => openShare(S.path, false) },
+    { label: 'Share…', demoOff: true, run: () => openShare(S.path, false) },
     { label: 'Move to trash', danger: true, run: () => trashPath(S.path, false) },
   ]);
 };
@@ -1498,7 +1541,7 @@ function commands() {
       { id: 'note-template', label: 'Note: Apply template…', run: () => setTimeout(() => openPicker(templateItems, 'Apply template…')) },
       { id: 'note-props', label: 'Note: Properties…', run: () => openProps() },
       { id: 'note-history', label: 'Note: History…', run: () => openHistory() },
-      { id: 'note-share', label: 'Note: Share…', run: () => openShare(S.path, false) },
+      { id: 'note-share', label: 'Note: Share…', demoOff: true, run: () => openShare(S.path, false) },
       { id: 'note-deleted', label: 'Note: Deleted tasks…', run: () => openDeleted({ path: S.path }) },
       { id: 'note-link', label: 'Note: Copy link to this note', run: () => copyText(`[[${basename(S.path)}]]`, 'Link copied') },
       { id: 'note-reveal', label: 'Note: Show in the sidebar', run: () => revealInTree(S.path) },
@@ -1509,7 +1552,8 @@ function commands() {
     ...(mobile.matches ? [] : [{ id: 'view-split', label: 'View: Split', hint: 'Ctrl+E', run: view('split') }]),
     { id: 'view-preview', label: 'View: Preview', hint: 'Ctrl+E', run: view('read') },
     { id: 'view-sidebar', label: 'View: Show or hide the sidebar', hint: 'Ctrl+\\', run: () => toggleSidebar() },
-    { id: 'view-collapse', label: 'View: Collapse all folders', run: () => { S.openFolders.clear(); store.set('openFolders', []); renderTree(); } },
+    { id: 'view-collapse', label: 'View: Collapse all folders', run: () => toggleAllFolders(false) },
+    { id: 'view-expand', label: 'View: Expand all folders', run: () => toggleAllFolders(true) },
     { id: 'editor-vim', label: `Editor: ${S.vim ? 'Turn off' : 'Turn on'} Vim mode`, run: () => { setVim(!S.vim); toast(`Vim mode ${S.vim ? 'on' : 'off'}`); } },
     { id: 'editor-lines', label: `Editor: ${S.lineNumbers ? 'Hide' : 'Show'} line numbers`, run: () => setLineNumbers(!S.lineNumbers) },
     { id: 'editor-zen', label: `Editor: ${S.zen ? 'Leave' : 'Enter'} zen mode`, hint: 'Ctrl+Shift+Enter', run: () => setZen(!S.zen) },
@@ -1524,7 +1568,7 @@ function commands() {
     ...(isMulti() ? [{ id: 'sign-out', label: 'Sign out', run: () => signOut() }] : []),
   ];
   // A–Z, destructive commands last (same rule as the menus)
-  return list.sort((a, b) => (!!a.danger - !!b.danger) || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+  return list.filter((c) => !(c.demoOff && S.me?.demo)).sort((a, b) => (!!a.danger - !!b.danger) || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
 }
 function commandItems(q) {
   const all = commands().map((c) => ({ ...c, recent: c.id }));
@@ -1567,6 +1611,7 @@ function renderSync() {
   const b = el.sync, st = S.sync;
   b.className = 'sync-btn';
   const label = b.querySelector('.label');
+  if (S.me?.demo) { label.textContent = 'Demo: sync is off'; b.title = 'CalDAV sync is turned off in this demo. Your notes here are a private sandbox, wiped after a while unused.'; return; }
   if (!syncConfigured()) { label.textContent = 'Set up CalDAV sync'; b.title = 'Connect a CalDAV task list'; return; }
   if (st.state === 'syncing') { b.classList.add('syncing'); label.textContent = 'Syncing…'; return; }
   if (st.state === 'error') { b.classList.add('error'); label.textContent = 'Sync problem'; b.title = (st.lastError ? st.lastError + '\n\n' : '') + nextSyncText(); return; }
@@ -1608,6 +1653,7 @@ async function runSync({ manual = false, force = false } = {}) {
 const scheduleSync = (() => { let t; return (ms = 3000) => { clearTimeout(t); t = setTimeout(() => runSync(), ms); }; })();
 
 el.sync.onclick = (e) => {
+  if (S.me?.demo) return toast('CalDAV sync is off in the demo');
   if (!syncConfigured()) return openSettings();
   if (S.sync.state === 'error') {
     return showMenu(e.currentTarget, [
@@ -1732,14 +1778,16 @@ const setDlg = $('#dlg-settings');
 const isMulti = () => S.me?.mode === 'multi' && !!S.me.user;
 const isAdmin = () => isMulti() && !!S.me.user.admin;
 
+const DEMO_HIDDEN = new Set(['caldav', 'users', 'sso', 'shares', 'account']);
 function sectionVisible(sec) {
+  if (S.me?.demo && DEMO_HIDDEN.has(sec)) return false; // the demo server refuses these anyway
   if (sec === 'account') return isMulti() && !!S.me.user.hasPassword; // nothing to manage without a password
   if (sec === 'users' || sec === 'sso') return !isMulti() || isAdmin(); // single-user: offers turning sign-in on
   return true;
 }
 
 function showSection(sec) {
-  if (!SECTIONS[sec] || !sectionVisible(sec)) sec = 'caldav';
+  if (!SECTIONS[sec] || !sectionVisible(sec)) sec = S.me?.demo ? 'appearance' : 'caldav';
   S.settingsSection = sec;
   store.set('settingsSection', sec);
   $('#set-title').textContent = SECTIONS[sec];
@@ -1778,9 +1826,9 @@ async function loadAbout() {
     ['Tickmark', a.version],
     ['Server build', a.build],
     ['This app\'s build', BUILD === 'dev' ? 'dev (not served by Tickmark)' : BUILD + (BUILD === a.build ? ' (up to date)' : ' (reload to update)')],
-    ['Running on', `Node.js ${a.node} · ${a.os} (${a.arch})${a.docker ? ' · Docker' : ''}`],
+    ['Running on', a.os ? `Node.js ${a.node} · ${a.os} (${a.arch})${a.docker ? ' · Docker' : ''}` : `Node.js ${a.node}`],
     ['Up since', `${new Date(a.startedAt).toLocaleString()} (${dur(a.uptime)})`],
-    ['Sign-in', a.mode === 'multi' ? `On${a.users != null ? `, ${plural(a.users, 'user')}` : ''}${a.sso ? ' · SSO' : ''}${a.passwordSignIn === false ? ' · no passwords' : ''}` : 'Off (single user)'],
+    ['Sign-in', a.mode === 'demo' ? 'Off (demo: a private sandbox per visitor)' : a.mode === 'multi' ? `On${a.users != null ? `, ${plural(a.users, 'user')}` : ''}${a.sso ? ' · SSO' : ''}${a.passwordSignIn === false ? ' · no passwords' : ''}` : 'Off (single user)'],
     ['Public links', a.publicUrl ? 'Available' : 'Need a public URL (TICKMARK_PUBLIC_URL)'],
     ['Note history', a.history ? 'On (git)' : 'Off: git isn\'t installed on the server'],
     ['Your notes', `${plural(a.notes, 'note')} in ${plural(a.folders, 'folder')}`],
@@ -2129,7 +2177,7 @@ async function loadReadme() {
     const { markdown } = await api('GET', '/api/readme');
     if (!markdown) { box.innerHTML = '<p class="note">The README isn\'t available on this server.</p>'; return; }
     cbIndex = 0;
-    box.innerHTML = marked.parse(markdown);
+    box.innerHTML = md(markdown, '#readme');
     box.querySelectorAll('input').forEach((i) => (i.disabled = true));
     const heads = [...box.querySelectorAll('h1, h2, h3')];
     heads.forEach((h) => (h.id = slug(h.textContent)));
@@ -2235,7 +2283,7 @@ const KEYMAP = [
     ['u Ctrl+R .', 'Undo, redo, repeat the last change'], ['v V gv o', 'Visual and visual-line mode, reselect, other end'],
     ['m{a-z} \'{a-z} `{a-z}', 'Set a mark, jump to its line or its exact place'], ['Ctrl+D Ctrl+U Ctrl+F Ctrl+B', 'Half page / page down and up'],
     ['Ctrl+E Ctrl+Y zz zt zb', 'Scroll a line, centre/top/bottom the cursor'], ['Ctrl+A Ctrl+X', 'Add to / subtract from the number at the cursor'],
-    [':w :q :wq :x ZZ', 'Save, close the note, both'], [':s/a/b/g :%s :\'<,\'>s', 'Substitute on the line, the note, the selection'],
+    [':w :q :wq :x ZZ', 'Save and sync, close the note, both'], [':s/a/b/g :%s :\'<,\'>s', 'Substitute on the line, the note, the selection'],
     [':d :y :sort :noh', 'Delete or yank lines, sort them, clear the search'], [':set nu :set nonu', 'Line numbers on or off'], [':e Name', 'Open (or create) a note'],
   ] },
 ];
@@ -2668,14 +2716,14 @@ function applyBranding(b) {
   document.title = S.mode === 'note' && S.path ? `${basename(S.path)} · ${b.name}` : b.name;
 }
 const brandDraft = {}; // kind → data: URL, or null to go back to the default
-const canBrand = () => !isMulti() || isAdmin();
+const canBrand = () => !S.me?.demo && (!isMulti() || isAdmin());
 function renderBranding() {
   const b = S.brand || { name: 'Tickmark', logo: '/icons/icon.svg', favicon: '/icons/icon.svg' };
   for (const k of Object.keys(brandDraft)) delete brandDraft[k];
   $('#brand-name').value = b.customName ? b.name : '';
   const editable = canBrand();
   $('#branding-wrap').hidden = !editable; // only admins see (and change) branding
-  $('#brand-admin-note').hidden = editable;
+  $('#brand-admin-note').hidden = editable || !!S.me?.demo;
   for (const x of document.querySelectorAll('.brand-pane input, .brand-pane button')) x.disabled = !editable;
   renderBrandImages();
   $('#btn-brand-reset').disabled = !editable || !(b.customName || b.hasLogo || b.hasFavicon);
@@ -3240,6 +3288,7 @@ function connectEvents() {
   });
   es.addEventListener('presence', (e) => { S.presence = JSON.parse(e.data); renderPresence(); });
   es.addEventListener('tree', () => scheduleTree());
+  es.addEventListener('prefs', (e) => { const p = JSON.parse(e.data); if (S.config) S.config.prefs = p; applyPrefs(p); });
   es.addEventListener('sync', (e) => {
     S.sync = JSON.parse(e.data);
     renderSync();
@@ -3303,6 +3352,24 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'f' && e.shiftKey) { e.preventDefault(); if (mobile.matches) el.app.classList.add('sidebar-open'); el.search.focus(); }
 });
 
+/** Use the theme and editor options saved on the server. Nothing saved yet: send this device's choices up. */
+function applyPrefs(p) {
+  if (!p || !Object.keys(p).length) {
+    if (!S.config) return;
+    api('PUT', '/api/config', { prefs: { theme: window.tickmarkTheme?.get() || 'system', vim: S.vim, lineNumbers: S.lineNumbers, zen: S.zen } })
+      .then((c) => { S.config = c; store.set('config', c); }).catch(() => {});
+    return;
+  }
+  prefsFromServer = true;
+  try {
+    if (p.theme && p.theme !== window.tickmarkTheme?.get()) { window.tickmarkTheme?.set(p.theme, { quiet: true }); if ($("#themes")?.childElementCount) renderThemes(); }
+    if (p.vim !== undefined && p.vim !== S.vim) setVim(p.vim);
+    if (p.lineNumbers !== undefined && p.lineNumbers !== S.lineNumbers) setLineNumbers(p.lineNumbers);
+    if (p.zen !== undefined && p.zen !== S.zen) setZen(p.zen);
+  } finally { prefsFromServer = false; }
+}
+addEventListener('tickmark-theme', (e) => savePref('theme', e.detail));
+
 // ---------------------------------------------------------------- boot
 async function boot() {
   api('GET', '/api/branding').then(applyBranding).catch(() => {});
@@ -3331,7 +3398,12 @@ async function boot() {
     S.openFolders = new Set(store.get('openFolders', []));
   }
   try { S.config = await api('GET', '/api/config'); store.set('config', S.config); } catch {}
-  if (S.config) { applyCustomCss(); applyCustomThemes(); }
+  if (S.config) { applyCustomCss(); applyCustomThemes(); applyPrefs(S.config.prefs); }
+  if (S.me?.demo) {
+    const d = $('#demo-banner');
+    d.hidden = false;
+    d.querySelector('.mins').textContent = S.me.demo.idleMinutes >= 120 ? `${Math.round(S.me.demo.idleMinutes / 60)} hours` : `${S.me.demo.idleMinutes} minutes`;
+  }
   try { S.sync = await api('GET', '/api/sync'); } catch {}
   await loadTree();
   connectEvents();

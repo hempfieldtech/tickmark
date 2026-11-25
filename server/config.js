@@ -20,7 +20,23 @@ const DEFAULTS = {
   customCss: '',
   // Themes made in Settings → Appearance → Theme editor: [{ id, name, dark, colors: { bg, panel, … } }].
   customThemes: [],
+  // Per-user display and editor choices, so they follow you to every device and survive a cleared cache.
+  prefs: {},
 };
+
+const PREF_BOOLS = ['vim', 'lineNumbers', 'zen'];
+/** Merge a prefs patch into the saved prefs; unknown keys and odd values are dropped. */
+export function cleanPrefs(prev, patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw bad('Preferences must be an object');
+  const out = { ...(prev || {}) };
+  if (patch.theme !== undefined) {
+    const t = String(patch.theme);
+    if (!/^[a-z0-9-]{1,40}$/.test(t)) throw bad('Bad theme');
+    out.theme = t;
+  }
+  for (const k of PREF_BOOLS) if (patch[k] !== undefined) out[k] = patch[k] === true;
+  return out;
+}
 
 export const THEME_COLORS = ['bg', 'panel', 'surface', 'line', 'text', 'muted', 'accent', 'accentSoft', 'danger', 'warn', 'mark', 'codeBg'];
 const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
@@ -164,6 +180,7 @@ export class Config {
       next.customCss = css;
     }
     if (patch.customThemes !== undefined) next.customThemes = cleanThemes(patch.customThemes);
+    if (patch.prefs !== undefined) next.prefs = cleanPrefs(this.data.prefs, patch.prefs);
     if (patch.moveCompleted !== undefined) next.moveCompleted = patch.moveCompleted === true || patch.moveCompleted === 'true';
     this.data = next;
     this.write();

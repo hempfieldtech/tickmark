@@ -29,6 +29,7 @@ import { ServerSettings, SSO_FIELDS } from './server-settings.js';
 import { Branding } from './branding.js';
 import { Shares, shareBlocker } from './shares.js';
 import { lineDiff } from './history.js';
+import { DEMO, DemoSessions, demoBlocked } from './demo.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = path.resolve(process.env.TICKMARK_DATA || path.join(ROOT, 'data'));
@@ -77,7 +78,7 @@ function applyAuth() {
   oidc = new OIDC(env);
   cipher = settingsCipher(env, { oidcEnabled: oidc.enabled });
   LOCAL_LOGIN = !/^(0|false|no|off)$/i.test(env.TICKMARK_LOCAL_LOGIN || 'true');
-  MULTI = oidc.enabled || users.exists();
+  MULTI = !DEMO && (oidc.enabled || users.exists()); // a demo has no sign-in: each visitor gets a sandbox
   if (MULTI && !sessions) sessions = new Sessions(DATA);
   // Open workspaces hold the old encryption key; they reopen with the new one on their next request.
   for (const name of [...workspaces.keys()]) closeWorkspace(name);
@@ -86,7 +87,8 @@ function applyAuth() {
 applyAuth();
 
 // ---------------------------------------------------------------- workspaces
-if (!MULTI) {
+const demo = DEMO ? new DemoSessions({ dataRoot: DATA, seedDir: path.join(ROOT, 'demo') }) : null;
+if (!MULTI && !DEMO) {
   try { single = new Workspace({ dataDir: DATA, vaultDir: VAULT, cipher }); } catch (e) { console.error(e.message); process.exit(1); }
 }
 
@@ -349,7 +351,7 @@ function sameOrigin(req) {
  * at this machine (DNS rebinding). So it answers only to addresses, local names and names it was given.
  */
 function allowedHost(req) {
-  if (MULTI || AUTH_USER) return true; // other sites' pages don't get the session or password
+  if (MULTI || AUTH_USER || DEMO) return true; // other sites' pages don't get the session or password; a demo has nothing to steal
   const host = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
   if (!host || net.isIP(host) || !host.includes('.') || ALLOWED_HOSTS.includes(host)) return true;
   if (oidc.publicUrl && new URL(oidc.publicUrl).hostname.toLowerCase() === host) return true;
@@ -461,10 +463,10 @@ const routes = {
     const list = ws.vault.list();
     return {
       version: PKG.version, build: BUILD, node: process.versions.node,
-      os: `${os.type()} ${os.release()}`, arch: process.arch, docker: fs.existsSync('/.dockerenv'),
+      ...(DEMO ? {} : { os: `${os.type()} ${os.release()}`, arch: process.arch, docker: fs.existsSync('/.dockerenv') }),
       startedAt: STARTED_AT, uptime: Math.round(process.uptime()),
-      mode: MULTI ? 'multi' : 'single', users: MULTI && user?.admin ? users.list().length : null,
-      sso: oidc.enabled, passwordSignIn: MULTI ? LOCAL_LOGIN : null, publicUrl: !shareBlocker(oidc.publicUrl),
+      mode: DEMO ? 'demo' : MULTI ? 'multi' : 'single', users: MULTI && user?.admin ? users.list().length : null,
+      sso: oidc.enabled, passwordSignIn: MULTI ? LOCAL_LOGIN : null, publicUrl: !DEMO && !shareBlocker(oidc.publicUrl),
       history: await ws.history.init(),
       notes: list.files.length, folders: list.folders.length,
       accounts: ws.config.get().accounts.filter((a) => a.url && a.calendarUrl).length,
@@ -687,7 +689,8 @@ const authRoutes = {
   // Branding shows on the sign-in screen too.
   'GET /api/branding': () => branding.public(),
   'GET /api/version': () => ({ build: BUILD }),
-  'GET /api/auth/me': ({ req }) => {
+  'GET /api/auth/me': ({ req, res }) => {
+    if (DEMO) { demo.get(req, res); return { mode: 'single', demo: demo.info() }; } // makes the sandbox now, before the app's other calls race to
     if (!MULTI) return { mode: 'single', canSetup: true };
     const u = sessionUser(req);
     return {
@@ -757,6 +760,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (!sameOrigin(req)) return json(res, 403, { error: "Requests from other sites aren't allowed" });
   // Public links: no sign-in, read-only, and nothing else of the instance is reachable through them.
+  if (DEMO && (/^\/s\//.test(url.pathname) || url.pathname.startsWith('/api/public/'))) return json(res, 404, { error: 'Public links are off in the demo' });
   if (req.method === 'GET' && /^\/s\/[\w-]+(\/.*)?$/.test(url.pathname)) return serveShareShell(res);
   const pubEvents = req.method === 'GET' && url.pathname.match(/^\/api\/public\/([\w-]+)\/events$/);
   if (pubEvents) return publicEvents(req, res, pubEvents[1], url.searchParams.get('path'));
@@ -809,6 +813,7 @@ const server = http.createServer(async (req, res) => {
 
   const key = `${req.method} ${url.pathname}`;
   try {
+    if (DEMO && demoBlocked(key)) return json(res, 403, { error: 'That isn\'t available in the demo' });
     if (authRoutes[key]) {
       const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req, 64 * 1024) : {};
       return json(res, 200, await authRoutes[key]({ req, res }, url.searchParams, body));
@@ -816,8 +821,9 @@ const server = http.createServer(async (req, res) => {
     const user = MULTI ? sessionUser(req) : null;
     if (MULTI && !user) return json(res, 401, { error: 'Not signed in' });
 
+    const wsOf = () => (DEMO ? demo.get(req, res) : workspaceFor(user?.name));
     if (url.pathname === '/api/events') {
-      const ws = workspaceFor(user?.name);
+      const ws = wsOf();
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
       res.write(`event: sync\ndata: ${JSON.stringify(ws.sync.status)}\n\n`);
       ws.clients.add(res);
@@ -835,7 +841,11 @@ const server = http.createServer(async (req, res) => {
     const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : {};
     // The workspace opens on first use, so admin pages still work if a user's settings can't be
     // decrypted (that's exactly when an admin needs to fix the SSO settings).
-    const ctx = { user, req, res, get ws() { return workspaceFor(user?.name); } };
+    if (DEMO) {
+      if (key === 'PUT /api/config' && body.accounts) throw Object.assign(new Error('CalDAV accounts are off in the demo'), { status: 403 });
+      if (/^(PUT|POST) \/api\/(file|folder|trash\/restore|history\/restore)$/.test(key)) demo.checkSize(wsOf());
+    }
+    const ctx = { user, req, res, get ws() { return wsOf(); } };
     json(res, 200, await handler(ctx, url.searchParams, body));
   } catch (e) {
     const known = e instanceof CalDAVError || Number.isInteger(e.status);
@@ -849,7 +859,7 @@ const server = http.createServer(async (req, res) => {
 // `kill -USR2 <pid>` (or `docker kill -s USR2 tickmark`) syncs every user's notes now and logs when
 // each is done: a way to get a current sync from the host without signing in.
 process.on('SIGUSR2', async () => {
-  const names = MULTI ? users.list().map((u) => u.name) : [null];
+  const names = DEMO ? [] : MULTI ? users.list().map((u) => u.name) : [null];
   for (const name of names) {
     const tag = name ? `[${name}] ` : '';
     let ws;
@@ -867,7 +877,9 @@ server.listen(PORT, HOST, () => {
   console.log(`Tickmark on http://${HOST}:${PORT}`);
   console.log(`  vault: ${VAULT}${MULTI ? '/<user>' : ''}`);
   console.log(`  data:  ${DATA}`);
-  if (MULTI) {
+  if (DEMO) {
+    console.log(`  demo mode: a sandbox per visitor from ${demo.seed}, wiped after ${demo.idleMinutes} min idle (up to ${demo.max} at once)`);
+  } else if (MULTI) {
     console.log(`  multi-user: ${users.list().length} user(s)${oidc.enabled ? `, SSO via ${oidc.issuer}` : ''}${LOCAL_LOGIN ? '' : ', password sign-in off'}`);
     if (AUTH_USER) console.warn('  TICKMARK_USER/TICKMARK_PASS are ignored in multi-user mode');
     if (cipher.enabled) console.log('  settings: CalDAV accounts encrypted with the OIDC client secret');

@@ -262,6 +262,8 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 #preview-wrap { overflow: auto; min-height: 0; background: var(--surface); }
 .view-read #preview-wrap { background: var(--bg); }
 #preview, #backlinks { max-width: 760px; margin: 0 auto; padding: 28px 32px; }
+/* A note's own HTML can't pin anything over the app: fixed-position elements stay inside the preview. */
+#preview, #doc { contain: layout; }
 #backlinks { padding-top: 0; padding-bottom: 40vh; }
 #backlinks:empty { display: none; }
 #backlinks h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
@@ -805,3 +807,6 @@ button.toc-twist:hover { background: color-mix(in srgb, var(--text) 8%, transpar
   .line-numbers.view-edit #editor, .line-numbers.view-split #editor { padding-left: 52px; }
 }
 .view-read #vim-mode { display: none !important; }
+#btn-collapse-all:not(.expand) .plus { display: none; }
+.demo-banner { margin: 0 12px 8px; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); color: var(--text); font-size: 12px; line-height: 1.4; }
+.demo-banner b { color: var(--accent); margin-right: 4px; }

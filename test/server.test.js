@@ -944,3 +944,55 @@ test('every checklist item across notes, with its state (for About)', async () =
     assert.equal(w.synced, false, 'no CalDAV account, so nothing syncs');
   } finally { await srv.stop(); }
 });
+
+test('theme and editor preferences are saved with the user\'s settings', async () => {
+  const dir = tmp();
+  const srv = await startServer({ TICKMARK_DATA: path.join(dir, 'data'), TICKMARK_VAULT: path.join(dir, 'vault') });
+  const c = client(srv.base);
+  try {
+    let r = await c.call('PUT', '/api/config', { prefs: { theme: 'dracula', vim: true } });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.data.prefs, { theme: 'dracula', vim: true });
+    r = await c.call('PUT', '/api/config', { prefs: { lineNumbers: true, zen: 'yes', junk: 1 } });
+    assert.deepEqual(r.data.prefs, { theme: 'dracula', vim: true, lineNumbers: true, zen: false }, 'merged; odd values dropped');
+    assert.equal((await c.call('PUT', '/api/config', { prefs: { theme: '"><x' } })).status, 400);
+    assert.deepEqual((await c.call('GET', '/api/config')).data.prefs.theme, 'dracula');
+  } finally { await srv.stop(); }
+});
+
+test('demo mode: a private sandbox per visitor, CalDAV and server settings off', async () => {
+  const dir = tmp();
+  const seed = path.join(dir, 'seed');
+  fs.mkdirSync(seed);
+  fs.writeFileSync(path.join(seed, 'Welcome.md'), '# Hi\n');
+  const data = path.join(dir, 'data'), vault = path.join(dir, 'vault');
+  const srv = await startServer({ TICKMARK_DATA: data, TICKMARK_VAULT: vault, TICKMARK_DEMO: 'true', TICKMARK_DEMO_SEED: seed, TICKMARK_DEMO_MAX_MB: '1', TICKMARK_DEMO_MAX_SESSIONS: '2' });
+  const a = client(srv.base), b = client(srv.base);
+  try {
+    const me = await a.call('GET', '/api/auth/me');
+    assert.equal(me.data.demo.idleMinutes, 60);
+    assert.ok(a.jar.get('tm_demo'), 'sandbox cookie set');
+    assert.equal((await a.call('GET', '/api/file?path=Welcome.md')).data.content, '# Hi\n', 'starts from the seed');
+    assert.equal((await a.call('POST', '/api/file', { path: 'Mine.md', content: 'secret' })).status, 200);
+    await b.call('GET', '/api/auth/me');
+    assert.notEqual(a.jar.get('tm_demo'), b.jar.get('tm_demo'));
+    assert.equal((await b.call('GET', '/api/file?path=Mine.md')).status, 404, 'other visitors can\'t see it');
+    assert.ok(!fs.existsSync(path.join(vault, 'Mine.md')), 'the real vault is untouched');
+    // Off in the demo
+    assert.equal((await a.call('PUT', '/api/config', { accounts: [{ name: 'x', url: 'https://dav.example/', calendarUrl: 'https://dav.example/c/', itemTags: 'task' }] })).status, 403);
+    for (const [m, u, body] of [['POST', '/api/caldav/discover', { url: 'http://127.0.0.1/' }], ['POST', '/api/sync', {}], ['GET', '/api/shares'],
+      ['PUT', '/api/branding', { name: 'x' }], ['POST', '/api/setup/admin', { username: 'x', password: 'yyyyyyyy' }], ['GET', '/api/users']]) {
+      assert.equal((await a.call(m, u, body)).status, 403, `${m} ${u}`);
+    }
+    assert.equal((await a.call('PUT', '/api/config', { prefs: { theme: 'nord' } })).status, 200, 'prefs still save');
+    // Size cap
+    assert.equal((await a.call('POST', '/api/file', { path: 'Big.md', content: 'x'.repeat(1_100_000) })).status, 200);
+    assert.equal((await a.call('POST', '/api/file', { path: 'More.md', content: 'y' })).status, 413);
+    // Session cap: a third visitor pushes out the longest-unused sandbox (a's, used before b's last call)
+    await b.call('GET', '/api/tree');
+    const c3 = client(srv.base);
+    await c3.call('GET', '/api/auth/me');
+    const again = await a.call('GET', '/api/file?path=Mine.md');
+    assert.equal(again.status, 404, 'a got a fresh sandbox');
+  } finally { await srv.stop(); }
+});

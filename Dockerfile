@@ -19,6 +19,7 @@ WORKDIR /app
 COPY package.json README.md ./
 COPY server ./server
 COPY public ./public
+COPY demo ./demo
 
 # Run as the image's unprivileged "node" user (uid 1000). Bind-mounted folders must be writable by it.
 RUN mkdir -p /vault /data && chown node:node /vault /data

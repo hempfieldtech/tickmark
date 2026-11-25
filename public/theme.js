@@ -1,5 +1,5 @@
 // Applies the saved theme before the page paints (loaded as a blocking script in <head>).
-// The choice is per device: it lives in localStorage, outside any signed-in user's keys.
+// Cached in localStorage so it paints at once; the app also saves it with your settings on the server.
 (() => {
   const KEY = 'tickmark:theme';
   const dark = matchMedia('(prefers-color-scheme: dark)');
@@ -68,6 +68,11 @@
   };
   window.tickmarkTheme = {
     get: pref,
-    set(p) { try { localStorage.setItem(KEY, JSON.stringify(p)); } catch {} apply(); },
+    /** `quiet` is for a choice that came from the server: it isn't sent back there. */
+    set(p, { quiet = false } = {}) {
+      try { localStorage.setItem(KEY, JSON.stringify(p)); } catch {}
+      apply();
+      if (!quiet) dispatchEvent(new CustomEvent('tickmark-theme', { detail: p }));
+    },
   };
 })();

@@ -169,6 +169,10 @@ export class Workspace {
   /** Apply a settings change; re-index if the set of synced tags changed. */
   updateConfig(body) {
     this.config.update(body);
+    // Other open tabs and devices of this user pick up the new theme / editor options straight away.
+    if (body?.prefs) this.broadcast('prefs', this.config.get().prefs);
+    const onlyPrefs = body && Object.keys(body).every((k) => k === 'prefs');
+    if (onlyPrefs) return this.config.public();
     if (this.index.setTagOptions(this.config.allTags())) {
       this.index.scan(this.vault, { force: true });
       this.broadcast('tree', {});
