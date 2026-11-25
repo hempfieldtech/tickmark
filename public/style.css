@@ -617,7 +617,8 @@ details.card[open] summary { margin-bottom: 4px; }
 .md .embed { display: block; margin: .6em 0; padding: 4px 14px 2px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); border-radius: 0 6px 6px 0; }
 .md .embed-title { display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); text-decoration: none; margin: 4px 0 2px; }
 .md .embed-title:hover { color: var(--accent); }
-.md .embed-body { display: block; }
+/* An embed starts from the default text style, not whatever the embedding note set on the paragraph around it. */
+.md .embed-body { display: block; color: var(--text); font-family: var(--sans); font-style: normal; font-weight: 400; text-align: start; text-transform: none; letter-spacing: normal; }
 .md .embed.missing .embed-body { color: var(--muted); font-style: italic; padding-bottom: 6px; }
 .task-cb:disabled { cursor: default; opacity: .6; }
 .md .embed .fold { left: -1.3em; }

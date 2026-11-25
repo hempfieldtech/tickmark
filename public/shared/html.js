@@ -14,8 +14,11 @@ const DROP = new Set(['SCRIPT', 'IFRAME', 'FRAME', 'FRAMESET', 'OBJECT', 'EMBED'
   'FORM', 'INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'OPTION', 'NOSCRIPT', 'TEMPLATE', 'DIALOG', 'PORTAL', 'TITLE']);
 const URL_ATTRS = /^(href|src|action|formaction|poster|background|cite|data|ping|xlink:href)$/i;
 
-/** A note's CSS, parsed by the browser and re-serialised inside @scope (`scope`), so it can't leak out. */
-export function scopeCss(css, scope) {
+/**
+ * A note's CSS, parsed by the browser and re-serialised inside @scope (`scope`), so it can't leak out.
+ * It also stops at `limit` (embedded notes), which carry CSS of their own, scoped to themselves.
+ */
+export function scopeCss(css, scope, limit = '.embed-body') {
   const sheet = new CSSStyleSheet();
   try { sheet.replaceSync(String(css)); } catch { return ''; } // @import is ignored by replaceSync
   const inside = [], outside = [];
@@ -24,7 +27,7 @@ export function scopeCss(css, scope) {
     if (r instanceof CSSKeyframesRule || r instanceof CSSFontFaceRule || (window.CSSPropertyRule && r instanceof CSSPropertyRule)) outside.push(r.cssText);
     else if (!(window.CSSImportRule && r instanceof CSSImportRule)) inside.push(r.cssText);
   }
-  return outside.join('\n') + (inside.length ? `\n@scope (${scope}) {\n${inside.join('\n')}\n}` : '');
+  return outside.join('\n') + (inside.length ? `\n@scope (${scope})${limit ? ` to (:scope ${limit})` : ''} {\n${inside.join('\n')}\n}` : '');
 }
 
 /**

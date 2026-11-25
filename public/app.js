@@ -303,6 +303,7 @@ function sectionOf(text, heading) {
   }
   return start >= 0 ? { text: lines.slice(start).join('\n'), start } : null;
 }
+let embedSeq = 0;
 async function fillEmbeds(root, chain) {
   const path0 = S.path;
   for (const box of root.querySelectorAll('span.embed:not([data-done])')) {
@@ -312,6 +313,7 @@ async function fillEmbeds(root, chain) {
     const title = `${f ? basename(f.path) : name}${heading ? ' › ' + heading : ''}`;
     box.innerHTML = `<a href="#" class="embed-title wikilink" data-target="${esc(box.dataset.target)}">${esc(title)}</a><span class="embed-body"></span>`;
     const body = box.querySelector('.embed-body');
+    body.dataset.scope = ++embedSeq; // its own CSS styles only this embed (see shared/html.js)
     if (!f) { box.classList.add('missing'); body.textContent = 'No such note yet.'; continue; }
     if (chain.includes(f.path) || chain.length > 3) { body.textContent = chain.includes(f.path) ? 'Embeds itself, so it isn\'t shown here.' : 'Nested too deep to show.'; continue; }
     try {
@@ -327,7 +329,7 @@ async function fillEmbeds(root, chain) {
       }
       if (S.path !== path0) return; // moved on to another note meanwhile
       const save = cbIndex;
-      body.innerHTML = md(text, '#preview');
+      body.innerHTML = md(text, `.embed-body[data-scope="${body.dataset.scope}"]`);
       cbIndex = save;
       // Checkboxes in an embed edit the other note's line (a click, or right-click for a state).
       drawStates(body);
