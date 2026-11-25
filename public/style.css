@@ -173,12 +173,13 @@ kbd { font: 12px var(--mono); border: 1px solid var(--line); border-bottom-width
 .t-row:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
 .t-row.active { background: var(--accent-soft); color: var(--accent); }
 .t-row.selected { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
-#sel-bar { display: flex; align-items: center; gap: 6px; margin: 2px 8px 4px; padding: 5px 6px 5px 10px; border-radius: 8px; background: var(--accent-soft); font-size: 12.5px; }
+#sel-bar { display: flex; align-items: center; gap: 2px; margin: 0 6px 2px; padding: 0 0 0 8px; font-size: 12px; color: var(--muted); }
 #sel-bar[hidden] { display: none; }
-#sel-bar .sel-count { flex: 1; color: var(--accent); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#sel-bar button { border: 0; border-radius: 6px; padding: 3px 8px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
-#sel-bar button:disabled { opacity: .45; cursor: default; }
-#sel-bar .sel-trash:not(:disabled) { color: var(--danger, #c0392b); }
+#sel-bar .sel-count { flex: 1; white-space: nowrap; }
+#sel-bar .icon-btn { width: 26px; height: 26px; }
+#sel-bar .icon-btn svg { width: 15px; height: 15px; }
+#sel-bar .icon-btn:disabled { opacity: .4; pointer-events: none; }
+#sel-bar .sel-trash:hover { color: var(--danger); }
 .t-row .name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .t-row .chev { width: 14px; height: 14px; color: var(--muted); transition: transform .12s; }
 .t-row.open .chev { transform: rotate(90deg); }

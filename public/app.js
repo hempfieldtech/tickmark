@@ -1290,8 +1290,10 @@ el.tree.addEventListener('click', (e) => {
   if (!row) return;
   if (e.target.closest('.t-more')) { e.stopPropagation(); return treeMenu(row, e.target.closest('.t-more')); }
   // Ctrl/Cmd+click picks rows one by one, Shift+click a run of them; in selection mode a plain click does too.
-  if (e.shiftKey && selAnchor) { selectRange(selAnchor, rowKey(row)); return; }
-  if (e.ctrlKey || e.metaKey || S.selecting) { toggleSel(row); return; }
+  // The open note counts as already picked: Ctrl+click adds to it, Shift+click runs from it.
+  const openRow = S.mode === 'note' && S.path && !S.sel.size ? 'f:' + S.path : null;
+  if (e.shiftKey && (selAnchor || openRow)) { if (openRow) S.sel.add(openRow); selectRange(selAnchor || openRow, rowKey(row)); return; }
+  if (e.ctrlKey || e.metaKey || S.selecting) { if (openRow && (e.ctrlKey || e.metaKey) && openRow !== rowKey(row)) S.sel.add(openRow); toggleSel(row); return; }
   if (S.sel.size) clearSel();
   selAnchor = rowKey(row);
   if (row.dataset.folder != null) {
