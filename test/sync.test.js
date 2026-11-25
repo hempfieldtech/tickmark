@@ -107,8 +107,11 @@ test('bi-directional sync', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, asy
     await mk('from-4-' + Date.now(), 'Other case', 'projects/plan.md');
     const r = await engine.run();
     assert.equal(r.imported, 4);
-    assert.match(read('Projects/Plan.md'), /- \[ \] Back to the plan #task \^t\w+\n\n## Complete\n- \[x\] Call the dentist/, 'existing note, above its finished tasks');
-    assert.match(read('Projects/Plan.md'), /- \[ \] Other case #task/, 'a folder and note differing only in case are reused');
+    // Both land in Projects/Plan.md, in whatever order the server lists them.
+    const open = read('Projects/Plan.md').split(/^## Complete$/m)[0];
+    assert.match(open, /- \[ \] Back to the plan #task \^t\w+\n/, 'existing note, above its finished tasks');
+    assert.match(open, /- \[ \] Other case #task \^t\w+\n/, 'a folder and note differing only in case are reused');
+    assert.match(read('Projects/Plan.md'), /\n\n## Complete\n- \[x\] Call the dentist/);
     assert.equal(fs.existsSync(path.join(dir, 'vault', 'projects')), false);
     assert.equal(read('Old/Someday.md').replace(/\^t\w+/, '^id'), '# Someday\n\n- [ ] Note is gone #task ^id\n', 'new note, folder created');
     assert.match(read('Inbox.md'), /- \[ \] Sneaky #task/, 'paths outside the vault go to the inbox');
