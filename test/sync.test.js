@@ -104,12 +104,14 @@ test('bi-directional sync', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, asy
     await mk('from-1-' + Date.now(), 'Back to the plan', 'Projects/Plan.md');
     await mk('from-2-' + Date.now(), 'Note is gone', 'Old/Someday.md');
     await mk('from-3-' + Date.now(), 'Sneaky', '../../etc/passwd.md');
+    await mk('from-4-' + Date.now(), 'Other case', 'projects/plan.md');
     const r = await engine.run();
-    assert.equal(r.imported, 3);
+    assert.equal(r.imported, 4);
     assert.match(read('Projects/Plan.md'), /- \[ \] Back to the plan #task \^t\w+\n\n## Complete\n- \[x\] Call the dentist/, 'existing note, above its finished tasks');
-    assert.equal(read('Someday.md').replace(/\^t\w+/, '^id'), '# Someday\n\n- [ ] Note is gone #task ^id\n', 'new note in the root');
+    assert.match(read('Projects/Plan.md'), /- \[ \] Other case #task/, 'a folder and note differing only in case are reused');
+    assert.equal(fs.existsSync(path.join(dir, 'vault', 'projects')), false);
+    assert.equal(read('Old/Someday.md').replace(/\^t\w+/, '^id'), '# Someday\n\n- [ ] Note is gone #task ^id\n', 'new note, folder created');
     assert.match(read('Inbox.md'), /- \[ \] Sneaky #task/, 'paths outside the vault go to the inbox');
-    assert.equal(fs.existsSync(path.join(dir, 'vault', 'Old')), false);
   });
 
   await t.test('a task with unchecked sub-items stays open when completed elsewhere', async () => {

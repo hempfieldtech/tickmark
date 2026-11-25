@@ -308,7 +308,7 @@ function serveShareShell(res) {
     if (err) return json(res, 404, { error: 'Not found' });
     res.writeHead(200, {
       'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer',
-      'Content-Security-Policy': "default-src 'self'; img-src * data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'",
+      'Content-Security-Policy': "default-src 'self'; img-src * data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
     });
     res.end(branding.html(src));
   });

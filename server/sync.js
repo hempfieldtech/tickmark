@@ -75,7 +75,17 @@ export class SyncEngine {
   }
 
   run(opts = {}) {
-    if (this.running) return this.running;
+    if (this.running) {
+      // The sync under way read the notes before whatever prompted this call (a save, Vim's :w…), so
+      // run once more when it ends. Every call that arrives meanwhile shares that one follow-up.
+      this.nextForce ||= !!opts.force;
+      this.next ||= this.running.catch(() => {}).then(() => {
+        const force = this.nextForce;
+        this.next = null; this.nextForce = false;
+        return this.run({ ...opts, force });
+      });
+      return this.next;
+    }
     this.running = this._run(opts)
       .then((r) => {
         const failed = r.accounts.filter((a) => a.error);
@@ -394,17 +404,13 @@ export class SyncEngine {
     const inbox = acct.inboxFile || 'Inbox.md';
     const tag = acct.itemTags[0];
     // A todo that says which note it came from ("From note: Work/Plan.md", as Tickmark writes them)
-    // goes back to that note: where it is if it still exists, otherwise a new note of that name in
-    // the vault's root. Everything else goes to the inbox.
+    // goes back to that note, creating it (and its folders) if it doesn't exist. A folder or note
+    // that differs only in case ("projects/" for "Projects/") counts as existing. Everything else
+    // goes to the inbox.
     const noteFor = (r) => {
       const p = r.fromNote?.replace(/\\/g, '/').replace(/^\/+/, '');
       if (!p || p.split('/').some((x) => x === '..' || x.startsWith('.'))) return inbox;
-      try {
-        if (this.vault.exists(p)) return p;
-        const root = p.split('/').pop();
-        this.vault.resolve(root, { md: true });
-        return root;
-      } catch { return inbox; }
+      try { return this.vault.matchPath(p); } catch { return inbox; }
     };
     for (const r of newRemote) {
       if (r.model.done && !r.reuseBid) continue; // don't flood the inbox with old completed todos

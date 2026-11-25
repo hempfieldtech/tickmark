@@ -460,3 +460,24 @@ test('"From note:" in a task description is read quickly whatever it holds', () 
   todoModel(findTodo(parseICS(ics('From note:' + ' '.repeat(300000) + 'x'))));
   assert.ok(Date.now() - t < 500, `took ${Date.now() - t} ms`);
 });
+
+test('a sync asked for while one runs gets a follow-up run that sees the newer notes', async () => {
+  const { SyncEngine } = await import('../server/sync.js');
+  const e = new SyncEngine({ vault: null, index: null, getConfig: () => ({}), log: () => {} });
+  let version = 1, runs = [];
+  e._run = async (opts) => {
+    const saw = version;
+    await new Promise((r) => setTimeout(r, 30));
+    runs.push({ saw, force: !!opts.force });
+    return { accounts: [], saw };
+  };
+  const first = e.run();
+  await new Promise((r) => setTimeout(r, 5));
+  version = 2; // a note is saved mid-sync (Vim :w), then sync is asked for
+  const second = e.run(), third = e.run({ force: true });
+  assert.equal(second, third, 'calls during one sync share one follow-up');
+  assert.equal((await first).saw, 1);
+  assert.equal((await second).saw, 2, 'the follow-up read the newer notes');
+  assert.deepEqual(runs, [{ saw: 1, force: false }, { saw: 2, force: true }]);
+  assert.equal(e.running, null);
+});

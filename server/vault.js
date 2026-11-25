@@ -105,6 +105,22 @@ export class Vault {
     return this.writeRaw(rel, content);
   }
 
+  /**
+   * `rel` with each folder and the file name swapped for an existing one that differs only in case
+   * ("projects/plan.md" → "Projects/Plan.md"); parts that don't exist yet stay as given.
+   */
+  matchPath(rel) {
+    const segs = rel.replace(/\\/g, '/').replace(/^\/+/, '').split('/').filter(Boolean);
+    const out = [];
+    for (const seg of segs) {
+      let names = [];
+      try { names = fs.readdirSync(out.length ? this.resolve(out.join('/')) : this.root); } catch {}
+      out.push(names.includes(seg) ? seg : names.find((n) => n.toLowerCase() === seg.toLowerCase()) || seg);
+    }
+    this.resolve(out.join('/'), { md: true }); // throws for anything outside the vault
+    return out.join('/');
+  }
+
   mkdir(rel) { fs.mkdirSync(this.resolve(rel), { recursive: true }); this.onWrite(null); }
 
   rename(from, to) {

@@ -181,7 +181,7 @@ Sync runs on the server, since the server holds the files. The editor saves when
 
 - **Three-way, per field.** The last synced state of each task is stored. If a field changed on only one side, that change wins. If the same field changed on both sides, the note wins. Different fields merge, e.g. you rename the task in the note while your phone marks it done.
 - **Already done before it ever synced** (e.g. the completed copies recurring tasks leave behind): stays in the note, isn't uploaded.
-- **Created elsewhere → the account's inbox note** (`Inbox.md` by default), tagged so it keeps syncing. Old completed todos are not imported. A todo whose description says `From note: Work/Plan.md` (as Tickmark writes them) goes back to that note instead, or to a new note of that name in the vault's root if it no longer exists.
+- **Created elsewhere → the account's inbox note** (`Inbox.md` by default), tagged so it keeps syncing. Old completed todos are not imported. A todo whose description says `From note: Work/Plan.md` (as Tickmark writes them) goes back to that note instead. If the note doesn't exist it's created, along with its folders; a folder or note whose name differs only in case (`work/plan.md`) is the existing one.
 - **Deletes propagate** both ways, but only when the other side hasn't changed since the last sync. If it has, the surviving copy is recreated so nothing is lost. Removing the tag from a line counts as deleting it.
 - **Deleted tasks can be restored for 30 days.** The **⋯** menu (top right) → **Deleted tasks…** lists the open note's synced tasks that sync deleted (Settings → **Deleted tasks** lists every note's), whether the line was removed from a note or the todo was deleted in a task app, and after any sync that deletes something a notice offers **Review**. Each entry shows the note and the heading it was under, so two tasks with the same name are easy to tell apart. *Restore* puts the line back in its note, under that heading if it still exists (at the end of the heading's own lines, before its subheadings and any closing `---`) (otherwise under a **Restored tasks** heading, in the inbox if the note is gone), and the todo back on the server, the exact copy where Tickmark kept one, so details other apps added survive. A line whose tag you removed, or that moved to another account, isn't counted as deleted and brings no notice. The list lives in the search index, so deleting `index.sqlite` empties it.
 - **Remote edits are patched, not replaced.** Properties other clients add (alarms, descriptions, timezones, X- props) are kept.
@@ -194,7 +194,7 @@ Sync runs on the server, since the server holds the files. The editor saves when
 
 Source / split / preview (Ctrl+E cycles). Preview checkboxes are clickable and edit the source line; checking an item stamps `✅ date` and moves it, with its sub-items, under a **Complete** heading at the end of its section, and a cancelled item goes under a **Cancelled** heading after that (reopening moves it back up; Settings → CalDAV accounts turns this off). That happens for items checked in a task app too. Besides `[ ]` and `[x]`, items can be in progress `[/]` (synced as IN-PROCESS) or cancelled `[-]` (synced as CANCELLED; it counts as finished). A synced item with unchecked sub-items can't be completed until they are. Tasks live in your notes: there is no separate task list view. `[[wikilinks]]` (clicking a missing one creates the note; renaming or moving a note or folder updates links to it), backlinks, embedded notes (`![[Other note]]` shows it inline, `![[Other note#Heading]]` just that section; its checkboxes work and change the other note, and its headings fold), collapsible headings in the preview, `[[` suggestions while typing, #tag search, full-text search, and drag-and-drop in the file tree.
 
-**HTML and CSS in notes.** Raw HTML (a `<div>`, `<details>`, `<kbd>`, a table…) and `<style>` blocks render in the preview. Anything that could run code is removed first (scripts, frames, forms, `on…` attributes, `javascript:` links), and a note's CSS is scoped to the note with `@scope`, so it can't restyle the app; an embedded note brings its own CSS, which styles only the embed (and the embedding note's CSS stops at the embed); fixed-position elements stay inside the preview.
+**HTML and CSS in notes.** Raw HTML and `<style>` blocks render in the preview, cleaned so they can't run code or restyle the app. See [HTML and CSS in notes](#html-and-css-in-notes) for what's allowed and what's removed.
 
 **Live collaboration.** When a note is open in more than one place (another device, another tab, or someone else signed in to the same account), round badges in the top bar show who's there, on which device and which line, and their cursor shows in the editor as a coloured caret with their name (an arrow at the top or bottom edge when it's out of view). Edits then save within about a second instead of waiting for a pause, and theirs merge into yours as they arrive (line by line, so two people changing the same line at once still get conflict markers). It's on in multi-user mode, and in single-user mode for notes with an active public link; public link pages update live as you type, and a 👁 badge counts their viewers. Public links are read-only unless you let them edit (see Public links); someone editing through such a link shows up as a **Guest** badge with their own caret, and sees yours while they edit.
 
@@ -327,6 +327,73 @@ Square, flat look:
 | Enter / Tab / Shift+Tab | continue, indent, or outdent lists |
 | Ctrl+S, Ctrl+E, Ctrl+\\, Ctrl+Shift+F | save, cycle view, toggle sidebar, search |
 | Ctrl+Shift+Enter | zen mode on or off (Esc also leaves it while Vim mode is off) |
+
+### HTML and CSS in notes
+
+A note can hold HTML and its own CSS alongside the markdown. They render in the preview, in embeds and on public pages; the editor still shows the source.
+
+**Markdown inside HTML.** A block that starts with an HTML tag runs until the next blank line, and markdown inside it isn't parsed (that's standard markdown). Leave a blank line after the opening tag and before the closing one to use markdown inside:
+
+```html
+<div class="callout">
+
+**Markdown** works here, and so do [[wikilinks]].
+
+</div>
+```
+
+Inline tags (`<kbd>`, `<mark>`, `<span style="…">`, `<sub>`, `<sup>`, `<u>`…) work in the middle of a markdown line.
+
+**What renders.** Any ordinary HTML element: `<div>`, `<span>`, `<p>`, headings, `<details>`/`<summary>`, `<table>` and its parts, `<kbd>`, `<mark>`, `<abbr>`, `<figure>`/`<figcaption>`, `<img>`, `<video>`/`<audio>` (with `controls`), `<svg>` drawings, `<br>`, `<hr>`, `<center>`, and so on. Attributes are kept (`class`, `id`, `style`, `title`, `width`, `open`, `colspan`, `data-…`, `aria-…`), apart from the ones listed below.
+
+**What's removed**, so nothing in a note can run code, send data or cover the app:
+
+| Removed | Why |
+|---|---|
+| `<script>`, `<noscript>`, `<template>` | code |
+| `<iframe>`, `<frame>`, `<object>`, `<embed>`, `<portal>` | other pages inside the note (use `![[Note]]` to embed a note) |
+| `<form>`, `<input>`, `<button>`, `<select>`, `<textarea>` | forms could post your data elsewhere; use `- [ ]` for checkboxes |
+| `<link>`, `<meta>`, `<base>`, `<title>`, `<dialog>` | would change the page itself |
+| SVG `<script>`, `<foreignObject>`, `<use>`, `<animate>`, `<set>` | code, or content pulled in from elsewhere |
+| `on…` attributes (`onclick`, `onerror`…) | code |
+| `href`/`src` (and similar) with a scheme other than `http`, `https`, `mailto`, `tel`, `obsidian` or `tickmark` | `javascript:` and `data:` links; relative links are fine |
+| `srcset`, `name`, `formtarget` | can load other images, or confuse the app |
+| `for`, `form`, `popovertarget`, `commandfor`, `command`, `accesskey`, `autofocus`, `loading` | could press or focus the app's own controls, or load an image only when CSS shows it |
+| an `id` the app itself uses (`editor`, `preview`…) | would confuse the app; any other `id` is kept |
+
+If the cleaned HTML would come out differently when the browser reads it again (a trick some sanitizer bypasses rely on), the note shows as plain text instead. The page's Content-Security-Policy also blocks scripts, as a second wall.
+
+**CSS.** Use `style="…"` on an element, or a `<style>` block anywhere in the note:
+
+```html
+<style>
+h1 { color: tomato; }
+.callout { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 8px 14px; border-radius: 6px; }
+</style>
+```
+
+- A `<style>` block styles only its own note: Tickmark wraps it in `@scope (#preview)`, so `body`, `:root` and the app's own parts (sidebar, top bar, settings) are out of reach. `:scope` is the note's container, e.g. `:scope { font-family: Georgia, serif; }`.
+- An embedded note (`![[Note]]`) keeps its own CSS: its `<style>` applies only inside the embed, the embedding note's CSS stops at the embed, and the embed doesn't inherit the surrounding paragraph's colour or font.
+- `:scope` and `&` work at the start of a selector (`:scope > p`, `& .x`). Rules that put something before them (`body:has(…) :scope`), check the container's neighbours (`:scope:has(+ …)`), or open their own `@scope` are dropped: they could test the app around the note and report it through a `url()`.
+- `@media`, `@supports`, `@container` and nested rules work. `@keyframes`, `@font-face` and `@property` work too and apply by name. `@import` is ignored.
+- Fixed-position elements (`position: fixed`) stay inside the preview, so a note can't pin something over the app.
+- The theme variables ([listed above](#editor), `var(--accent)`, `var(--muted)`, `var(--surface)`…) work, so a note's styles can follow the theme.
+- Malformed CSS is dropped rule by rule; a stray `}` can't escape the scope.
+- [Custom CSS](#example-css) in Settings is different: it styles the whole app, on every note.
+
+Example: a two-column note with a highlighted box.
+
+```html
+<style>
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.box { background: var(--accent-soft); border-radius: 8px; padding: 10px 14px; }
+</style>
+
+<div class="cols">
+<div class="box">Left column</div>
+<div class="box">Right column</div>
+</div>
+```
 
 The app works offline. Notes you've opened are cached, and edits are queued on the device and merged when the server is reachable again.
 
