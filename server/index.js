@@ -797,13 +797,19 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { merged: r.merged, conflicts: r.conflicts || 0, content: r.merged ? r.content : content }, { 'X-Robots-Tag': 'noindex' });
       }
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' });
-      return res.end(JSON.stringify({ ...data, brand: branding.public() }));
+      // An editable link files finished items like the owner's app does.
+      const moveCompleted = data.edit ? ws.config.get().moveCompleted !== false : undefined;
+      return res.end(JSON.stringify({ ...data, moveCompleted, brand: branding.public() }));
     } catch (e) {
       if (!e.status) console.error(e);
       return json(res, e.status || 500, { error: e.status ? e.message : 'Something went wrong' });
     }
   }
-  if (!MULTI && !checkBasic(req)) {
+  // The app's own scripts, styles and icons are public (a public link's page needs them, and they're
+  // the published source anyway); the app page itself and everything under /api/ still ask for the password.
+  const asset = req.method === 'GET' && !url.pathname.startsWith('/api/') && !url.pathname.startsWith('/auth/') &&
+    !!path.extname(url.pathname) && !/^\/index\.html$/i.test(url.pathname);
+  if (!MULTI && !asset && !checkBasic(req)) {
     res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Tickmark"' });
     return res.end('Authentication required');
   }

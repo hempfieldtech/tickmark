@@ -569,6 +569,9 @@ test('public links share a note or folder, read-only, only with a domain-based p
     const note = (await call('POST', '/api/shares', { path: 'Plan.md' })).data;
     assert.equal(note.kind, 'note');
     assert.match(note.url, /^https:\/\/notes\.example\.com\/s\/[\w-]{22}$/);
+    // The public page loads its scripts and styles without the password; the app and its data still need it.
+    for (const u of ['/share.js', '/style.css', '/vendor/marked.esm.js']) assert.equal((await anon(u)).status, 200, u);
+    for (const u of ['/', '/index.html', '/api/tree']) assert.equal((await anon(u)).status, 401, u);
     assert.equal((await call('POST', '/api/shares', { path: 'Plan.md' })).data.token, note.token, 'sharing again gives the same link');
     const folder = (await call('POST', '/api/shares', { path: 'Trip' })).data;
     assert.equal(folder.kind, 'folder');

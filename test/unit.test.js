@@ -481,3 +481,16 @@ test('a sync asked for while one runs gets a follow-up run that sees the newer n
   assert.deepEqual(runs, [{ saw: 1, force: false }, { saw: 2, force: true }]);
   assert.equal(e.running, null);
 });
+
+test('changeItem: sub-item rule, cancelling cascades, filing', async () => {
+  const { changeItem } = await import('../public/shared/tasks.js');
+  const t = '# Trip\n\n- [ ] Pack\n  - [ ] Socks\n  - [/] Shoes\n  - [x] Passport\n- [ ] Book hotel\n';
+  assert.deepEqual(changeItem(t, 2), { text: t, open: 2 }, 'refused while sub-items are open');
+  assert.equal(changeItem(t, 2, 'x').open, 2, 'from the menu too');
+  const c = changeItem(t, 2, '-').text;
+  assert.equal(c, '# Trip\n\n- [ ] Book hotel\n\n## Cancelled\n- [-] Pack\n  - [-] Socks\n  - [-] Shoes\n  - [x] Passport\n', 'cancelled with its open sub-items, filed');
+  assert.equal(changeItem(t, 2, '-', { moveCompleted: false }).text, '# Trip\n\n- [-] Pack\n  - [-] Socks\n  - [-] Shoes\n  - [x] Passport\n- [ ] Book hotel\n');
+  const done = changeItem('# A\n\n- [ ] One\n  - [x] Sub\n- [ ] Two\n', 2).text;
+  assert.match(done, /^# A\n\n- \[ \] Two\n\n## Complete\n- \[x\] One ✅ \d{4}-\d\d-\d\d\n  - \[x\] Sub\n$/, 'checked and filed with its sub-items');
+  assert.match(changeItem(done, 5).text, /^# A\n\n- \[ \] Two\n- \[ \] One\n  - \[x\] Sub\n$/, 'reopened moves back up');
+});

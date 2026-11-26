@@ -131,6 +131,16 @@ test('bi-directional sync', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, asy
     assert.match(read('Projects/Trip.md'), /- \[x\] Pack #task/, 'completes once its sub-items are done');
   });
 
+  await t.test('cancelling a task elsewhere cancels its unfinished sub-items', async () => {
+    write('Projects/Party.md', '- [ ] Plan party #task\n  - [ ] Invites\n  - [/] Cake\n  - [x] Venue ✅ 2026-01-02\n');
+    await engine.run();
+    await editRemote('Plan party', { done: true, status: 'cancelled' });
+    await engine.run();
+    const note = read('Projects/Party.md');
+    assert.match(note, /- \[-\] Plan party #task \^t\w+\n  - \[-\] Invites\n  - \[-\] Cake\n  - \[x\] Venue ✅ 2026-01-02/, note);
+    assert.equal((await byTitle('Plan party')).model.status, 'cancelled', 'stays cancelled on the server');
+  });
+
   await t.test('in progress and cancelled sync both ways', async () => {
     write('Projects/States.md', '- [/] Write report #task\n- [ ] Book venue #task\n');
     await engine.run();

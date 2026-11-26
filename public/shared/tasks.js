@@ -479,3 +479,46 @@ export function dropRecurrence(rest) {
 
 /** A cancelled task has no recurrence (see dropRecurrence). */
 export const endCancelledSeries = (model) => (model.status === 'cancelled' && model.recur ? { ...model, recur: null } : model);
+
+const ITEM_STATE = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[([ xX/-])\]/;
+
+/** Cancel the unfinished checkbox sub-items ([ ] and [/]) of the item on `lineNo`; finished ones stay. */
+export function cancelSubtasks(text, lineNo) {
+  const lines = text.split('\n');
+  const indent = (l) => l.match(/^[ \t>]*/)[0].replace(/\t/g, '    ').length;
+  const base = indent(lines[lineNo] ?? '');
+  for (let i = lineNo + 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    if (indent(lines[i]) <= base) break;
+    if (/^[ /]$/.test(lines[i].match(ITEM_STATE)?.[1] ?? '')) text = setTaskState(text, i, '-');
+  }
+  return text;
+}
+
+/**
+ * Change a checklist item the way a click or the checkbox menu does: `ch` is the new state
+ * (' ', '/', 'x', '-'), or null to toggle (to do / in progress → done, finished → to do).
+ * - An item with unchecked sub-items can't be completed: returns { text (unchanged), open: n }.
+ * - Cancelling an item cancels its unfinished sub-items too (they aren't needed any more).
+ * - With moveCompleted, it's filed under (or back out of) "Complete" / "Cancelled".
+ */
+export function changeItem(text, lineNo, ch = null, { moveCompleted = true } = {}) {
+  const was = (text.split('\n')[lineNo] ?? '').match(ITEM_STATE)?.[1];
+  if (was === undefined) return { text, open: 0 };
+  const finished = (c) => 'xX-'.includes(c);
+  const want = ch ?? (finished(was) ? ' ' : 'x');
+  if (want === was || (finished(was) && !STATE[was].status && 'xX'.includes(want))) return { text, open: 0 };
+  if ('xX'.includes(want) && !finished(was)) {
+    const open = openSubtasks(text, lineNo);
+    if (open) return { text, open };
+  }
+  let next = text;
+  if (want === '-') next = cancelSubtasks(next, lineNo);
+  // Checking an open item goes through toggleLine: ✅ date, and a recurring one moves on.
+  next = 'xX'.includes(want) && !finished(was) ? toggleLine(next, lineNo) : setTaskState(next, lineNo, want);
+  const kind = (c) => (c === '-' ? 'cancelled' : 'xX'.includes(c) ? 'done' : 'open');
+  if (next === text || !moveCompleted || kind(want) === kind(was)) return { text: next, open: 0 };
+  // A recurring item leaves a completed copy on the line below; that's the one to file away.
+  const at = next.split('\n').length > text.split('\n').length ? lineNo + 1 : lineNo;
+  return { text: fileCompleted(next, at) ?? next, open: 0 };
+}

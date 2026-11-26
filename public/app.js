@@ -1,5 +1,5 @@
 import { marked } from './vendor/marked.esm.js';
-import { checkboxLines, toggleLine, setTaskState, fileCompleted, openSubtasks, parseTasks, normTag, localDate } from './shared/tasks.js';
+import { checkboxLines, changeItem, parseTasks, normTag, localDate } from './shared/tasks.js';
 import { parseRecurrence, describeRecurrence } from './shared/recur.js';
 import { textStats } from './shared/words.js';
 import { parseFrontmatter, writeFrontmatter } from './shared/frontmatter.js';
@@ -465,37 +465,16 @@ function setEditorText(text) {
 }
 
 /** Set an item's state from the checkbox menu, with the same sub-item rule and "Complete" filing as a click. */
-function setTaskStateFiled(text, lineNo, ch) {
-  const was = (text.split('\n')[lineNo] || '').match(/\[([ xX/-])\]/)?.[1];
-  if (was === undefined || was === ch) return text;
-  const finishing = 'xX-'.includes(ch) && !'xX-'.includes(was);
-  if (finishing && ch !== '-') return toggleTask(text, lineNo); // a normal check: date, recurrence, filing
-  if (finishing) {
-    const open = openSubtasks(text, lineNo);
-    if (open) { toast(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`); return text; }
-  }
-  const next = setTaskState(text, lineNo, ch);
-  // Filed again when it opens, finishes, or switches between done and cancelled (Complete ⇄ Cancelled).
-  const kind = (c) => (c === '-' ? 'cancelled' : 'xX'.includes(c) ? 'done' : 'open');
-  if (S.config?.moveCompleted === false || kind(ch) === kind(was)) return next;
-  return fileCompleted(next, lineNo) ?? next;
-}
+const setTaskStateFiled = (text, lineNo, ch) => changeTask(text, lineNo, ch);
 
 /** Check or uncheck an item; with "move completed" on, it also moves under/out of the "Complete" heading. */
-function toggleTask(text, lineNo) {
-  // An item (synced or not) can't be checked while it has unchecked sub-items.
-  if (/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[ /]\]/.test(text.split('\n')[lineNo] || '')) {
-    const open = openSubtasks(text, lineNo);
-    if (open) {
-      toast(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`);
-      return text;
-    }
-  }
-  const next = toggleLine(text, lineNo);
-  if (next === text || S.config?.moveCompleted === false) return next;
-  // A recurring item leaves a completed copy on the line below; that's the one to file away.
-  const done = next.split('\n').length > text.split('\n').length ? lineNo + 1 : lineNo;
-  return fileCompleted(next, done) ?? next;
+const toggleTask = (text, lineNo) => changeTask(text, lineNo, null);
+
+function changeTask(text, lineNo, ch) {
+  // An item can't be completed while it has unchecked sub-items; cancelling it cancels them too.
+  const r = changeItem(text, lineNo, ch, { moveCompleted: S.config?.moveCompleted !== false });
+  if (r.open) toast(`Finish its ${r.open} sub-item${r.open === 1 ? '' : 's'} first`);
+  return r.text;
 }
 
 function applyEdit(text) {

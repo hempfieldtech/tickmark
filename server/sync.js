@@ -11,7 +11,7 @@
 // Several CalDAV accounts can be configured. Each synced item belongs to exactly one, chosen by
 // accountFor(); sync state is kept per account, so retagging an item moves it between accounts.
 
-import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted, appendLines, openSubtasks, endCancelledSeries } from '../public/shared/tasks.js';
+import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted, appendLines, openSubtasks, endCancelledSeries, cancelSubtasks } from '../public/shared/tasks.js';
 import { buildTodo, parseICS, findTodo, todoModel, occurrenceCompleted } from './ical.js';
 import { CalDAV } from './caldav.js';
 import { fingerprint } from './secrets.js';
@@ -352,7 +352,8 @@ export class SyncEngine {
           // A cancelled recurring todo (here or in the other app) ends its series on both sides.
           let m = endCancelledSeries(merge(L.model, R.model, base));
           // Not done while it has unchecked sub-items in the note: completing it elsewhere is undone.
-          if (m.done && !L.model.done && L.openSubtasks) m = { ...m, done: false };
+          // Cancelling it is fine: its unfinished sub-items are cancelled with it (when it's written below).
+          if (m.done && !L.model.done && L.openSubtasks && m.status !== 'cancelled') m = { ...m, done: false };
           // Completed elsewhere: a recurring todo moves on to its next date on both sides, and the
           // note keeps a completed copy as history.
           let history = null;
@@ -442,6 +443,7 @@ export class SyncEngine {
         const remove = new Set();
         const insertAfter = new Map(); // line → extra line (recurring history)
         const appends = [];
+        const cancelLines = []; // items cancelled in the task app: their unfinished sub-items go too
         for (const op of ops) {
           if (op.type === 'append') { // added after the other edits, which go by line number
             appends.push(op.line);
@@ -456,6 +458,7 @@ export class SyncEngine {
           if (!t || !modelsEqual(taskModel(t), op.expect)) continue;
           if (op.type === 'update') {
             lines[t.line] = buildTaskLine(t, op.model, { doneDate: op.doneDate || t.doneDate });
+            if (op.model.status === 'cancelled' && op.expect.status !== 'cancelled') cancelLines.push(t.line);
             if (op.history) insertAfter.set(t.line, op.history);
             result.pulled++;
             result.log.push({ dir: 'received', kind: 'updated', title: op.model.title, path, changes: changes(op.expect, op.model) });
@@ -466,6 +469,11 @@ export class SyncEngine {
             op.trash.line = lines[t.line];
           }
           applied.push(op);
+        }
+        if (cancelLines.length) {
+          let t = lines.join('\n');
+          for (const at of cancelLines) t = cancelSubtasks(t, at); // same line count, so the numbers below hold
+          lines = t.split('\n');
         }
         if (remove.size || insertAfter.size) {
           lines = lines.flatMap((l, i) => (remove.has(i) ? [] : insertAfter.has(i) ? [l, insertAfter.get(i)] : [l]));

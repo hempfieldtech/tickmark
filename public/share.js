@@ -1,7 +1,7 @@
 // A public link (/s/<token>, or /s/<token>/<note in the shared folder>): read-only, or, when the owner
 // allows it, editable (checkboxes in the page, and Edit for the note's markdown).
 import { marked } from './vendor/marked.esm.js';
-import { checkboxLines, toggleLine, openSubtasks } from './shared/tasks.js';
+import { checkboxLines, changeItem } from './shared/tasks.js';
 import { highlight } from './shared/highlight.js';
 import { safeUrl } from './shared/url.js';
 import { cleanHtml, OWN } from './shared/html.js';
@@ -214,10 +214,12 @@ $('#doc').addEventListener('click', (e) => {
   e.preventDefault();
   if (!doc.edit || cb.dataset.line === '') return;
   const line = Number(cb.dataset.line);
-  // Same rule as the app: an item with unchecked sub-items can't be checked yet.
-  const open = /\[[ /]\]/.test(doc.content.split('\n')[line] || '') && openSubtasks(doc.content, line);
-  if (open) return status(`Finish its ${open} sub-item${open === 1 ? '' : 's'} first`, true);
-  doc.content = toggleLine(doc.content, line);
+  // Same rules as the app: an item with unchecked sub-items can't be checked yet, and a finished
+  // item moves under "Complete" (with its sub-items) when the owner has that on.
+  const r = changeItem(doc.content, line, null, { moveCompleted: doc.moveCompleted });
+  if (r.open) { cb.checked = false; return status(`Finish its ${r.open} sub-item${r.open === 1 ? '' : 's'} first`, true); }
+  if (r.text === doc.content) return;
+  doc.content = r.text;
   render(doc.content, doc.name);
   savePub();
 });
@@ -266,6 +268,7 @@ async function load(push = false, quiet = false) {
   document.querySelectorAll('.brand-name').forEach((x) => (x.textContent = b.name || 'Tickmark'));
   if (b.logo) document.querySelector('.brand img').src = b.logo;
   doc.edit = !!data.edit;
+  doc.moveCompleted = data.moveCompleted !== false;
   $('#btn-edit').hidden = !doc.edit;
   if (data.kind === 'note') {
     showNote(data.content, data.name, '');
