@@ -141,12 +141,14 @@ test('recurrence: next occurrence', async () => {
   assert.equal(next('FREQ=MONTHLY;BYDAY=MO;BYSETPOS=1', '2026-11-02'), null, "can't compute → stop, never guess");
 });
 
-test('checking a recurring item moves it on and keeps a completed copy', () => {
+test('checking a recurring item just moves its date on, in place', async () => {
+  const { changeItem } = await import('../public/shared/tasks.js');
   const text = '- [ ] Water plants #task 🔁 every week 📅 2026-11-24 ^tabc1234\n  - [ ] sub';
   const out = toggleLine(text, 0).split('\n');
-  assert.equal(out[0], '- [ ] Water plants #task 🔁 every week 📅 2026-12-01 ^tabc1234');
-  assert.match(out[1], /^- \[x\] Water plants #task 📅 2026-11-24 ✅ \d{4}-\d\d-\d\d$/);
-  assert.equal(out[2], '  - [ ] sub');
+  assert.deepEqual(out, ['- [ ] Water plants #task 🔁 every week 📅 2026-12-01 ^tabc1234', '  - [ ] sub'], 'no completed copy');
+  const note = '## Chores\n- [ ] Bins 🔁 every week 📅 2026-11-24\n- [ ] Dust\n';
+  assert.equal(changeItem(note, 1).text, '## Chores\n- [ ] Bins 🔁 every week 📅 2026-12-01\n- [ ] Dust\n', 'not filed under Complete');
+  assert.match(changeItem('- [ ] Last 🔁 every week until 2026-11-25 📅 2026-11-24\n', 0).text, /^## Complete\n- \[x\] Last .*✅/, 'the last one completes');
   const [t] = parseTasks('- [ ] Odd 🔁 every fortnight #task', opts);
   assert.equal(t.title, 'Odd 🔁 every fortnight', 'unknown rules stay in the text');
   assert.equal(t.recur, null);
@@ -493,4 +495,22 @@ test('changeItem: sub-item rule, cancelling cascades, filing', async () => {
   const done = changeItem('# A\n\n- [ ] One\n  - [x] Sub\n- [ ] Two\n', 2).text;
   assert.match(done, /^# A\n\n- \[ \] Two\n\n## Complete\n- \[x\] One ✅ \d{4}-\d\d-\d\d\n  - \[x\] Sub\n$/, 'checked and filed with its sub-items');
   assert.match(changeItem(done, 5).text, /^# A\n\n- \[ \] Two\n- \[ \] One\n  - \[x\] Sub\n$/, 'reopened moves back up');
+});
+
+test('sorting checklist items: by due, priority, state, name; kept sorted via frontmatter', async () => {
+  const { sortTasks, autoSort, sortKeysFrom, changeItem } = await import('../public/shared/tasks.js');
+  const note = '# Week\n- [ ] Call 📅 2026-12-05\n- [ ] Write\n  - [ ] outline\n- [/] Plan ⏫ 📅 2026-12-05\n- [x] Book 📅 2026-12-01 ✅ 2026-11-30\n\n- [ ] Z\n- [ ] A\n```\n- [ ] y\n- [ ] b\n```\n';
+  const titles = (t) => t.split('```')[0].split('\n').filter((l) => /^- \[/.test(l)).map((l) => l.replace(/^- \[.\] (\w+).*/, '$1'));
+  assert.deepEqual(titles(sortTasks(note, ['due'])), ['Book', 'Call', 'Plan', 'Write', 'Z', 'A'], 'undated last, ties keep their order, each run on its own');
+  assert.deepEqual(titles(sortTasks(note, ['due', 'priority'])), ['Book', 'Plan', 'Call', 'Write', 'Z', 'A']);
+  assert.deepEqual(titles(sortTasks(note, ['state'])), ['Plan', 'Call', 'Write', 'Book', 'Z', 'A']);
+  assert.deepEqual(titles(sortTasks(note, ['name'])), ['Book', 'Call', 'Plan', 'Write', 'A', 'Z']);
+  assert.match(sortTasks(note, ['name']), /- \[ \] Write\n {2}- \[ \] outline\n/, 'sub-items move with their item');
+  assert.match(sortTasks(note, ['name']), /```\n- \[ \] y\n- \[ \] b\n```/, 'code blocks are left alone');
+  const kept = '---\nsort-tasks: [due, priority]\n---\n- [ ] Later 📅 2026-12-09\n- [ ] Soon 📅 2026-12-02\n- [x] Done 📅 2026-12-01 ✅ 2026-11-30\n';
+  assert.deepEqual(sortKeysFrom(kept), ['due', 'priority']);
+  assert.equal(autoSort('- [ ] b\n- [ ] a\n'), '- [ ] b\n- [ ] a\n', 'no frontmatter: untouched');
+  const after = changeItem(kept, 3, '/', { moveCompleted: false }).text;
+  assert.deepEqual(titles(after), ['Done', 'Soon', 'Later'], 'changing an item re-sorts the note');
+  assert.deepEqual(titles(changeItem('---\nsort-tasks: name\n---\n- [ ] b\n- [ ] a\n', 3).text), ['a', 'b']);
 });

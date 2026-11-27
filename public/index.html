@@ -6,6 +6,10 @@
   <title>Tickmark</title>
   <meta name="theme-color" content="#f7f6f3">
   <meta name="tickmark-build" content="dev">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Tickmark">
   <script src="/theme.js"></script>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
@@ -130,7 +134,9 @@
         <h2>Settings</h2>
         <button type="button" data-sec="about">About</button>
         <button type="button" data-sec="account">Account</button>
+        <button type="button" data-sec="api">API</button>
         <button type="button" data-sec="appearance">Appearance</button>
+        <button type="button" data-sec="attachments">Attachments</button>
         <button type="button" data-sec="caldav">CalDAV accounts</button>
         <button type="button" data-sec="deleted">Deleted tasks</button>
         <button type="button" data-sec="editor">Editor</button>
@@ -168,6 +174,7 @@
         </form>
 
         <section data-sec="appearance" class="set-body">
+          <h4 class="sub-head first">Theme</h4>
           <p class="note">Your theme. It applies straight away and follows you to your other devices.</p>
           <div id="themes" class="themes" role="radiogroup" aria-label="Theme"></div>
           <div class="card css-card">
@@ -191,13 +198,13 @@
           <label>Name <input id="brand-name" maxlength="40" placeholder="Tickmark" autocomplete="off"></label>
           <div class="brand-imgs">
             <div class="card brand-img" data-kind="logo">
-              <h4>Logo</h4>
+              <h4 data-nav-level="2">Logo</h4>
               <p class="note">Sidebar, sign-in screen and app icon. A square image, 512×512 or an SVG, works best.</p>
               <div class="row"><img alt="" class="brand-preview"><input type="file" accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif" hidden>
                 <button type="button" class="btn" data-act="pick">Choose…</button><button type="button" class="btn" data-act="clear">Default logo</button></div>
             </div>
             <div class="card brand-img" data-kind="favicon">
-              <h4>Favicon</h4>
+              <h4 data-nav-level="2">Favicon</h4>
               <p class="note">The browser tab icon. Leave it on the default to use the logo.</p>
               <div class="row"><img alt="" class="brand-preview"><input type="file" accept="image/png,image/svg+xml,image/x-icon,image/vnd.microsoft.icon,image/gif,image/webp" hidden>
                 <button type="button" class="btn" data-act="pick">Choose…</button><button type="button" class="btn" data-act="clear">Default favicon</button></div>
@@ -206,6 +213,34 @@
           <div class="row"><button type="button" id="btn-brand-save" class="btn primary">Save</button>
             <button type="button" id="btn-brand-reset" class="btn">Reset all to default</button><span class="note" id="brand-state"></span></div>
           </div>
+          </div>
+          <div id="login-look-wrap" hidden>
+            <h4 class="sub-head" id="login-look">Sign-in screen</h4>
+            <p class="note">How the sign-in screen looks to everyone (admins only). <span id="login-look-off" hidden>It shows once sign-in is turned on (Users).</span></p>
+            <div class="login-look">
+              <div class="ll-fields">
+                <label>Theme <select id="ll-theme"><option value="">Each visitor's own</option></select></label>
+                <div class="ll-colour"><span class="ll-lbl">Accent</span>
+                  <label class="ll-chk"><input type="checkbox" id="ll-accent-on"> Own colour</label>
+                  <input type="color" id="ll-accent" value="#2f7d6d" aria-label="Accent colour"></div>
+                <div class="ll-colour"><span class="ll-lbl">Background</span>
+                  <label class="ll-chk"><input type="checkbox" id="ll-bg-on"> Own colour</label>
+                  <input type="color" id="ll-bg" value="#f7f6f3" aria-label="Background colour"></div>
+                <div class="ll-colour"><span class="ll-lbl">Picture</span>
+                  <input type="file" id="ll-image-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+                  <button type="button" class="btn" id="ll-image-pick">Choose…</button>
+                  <button type="button" class="btn" id="ll-image-clear">None</button></div>
+                <label class="check"><input type="checkbox" id="ll-dim"> Darken the picture so the form stands out</label>
+                <label>Message <textarea id="ll-message" rows="3" maxlength="300" placeholder="Welcome! Ask Alex for an account."></textarea></label>
+              </div>
+              <div class="ll-preview" id="ll-preview" aria-label="Preview">
+                <div class="ll-card"><span class="ll-brand"><img alt="" id="ll-logo"> <b class="ll-name"></b></span>
+                  <p class="ll-msg"></p><span class="ll-input"></span><span class="ll-input"></span><span class="ll-btn">Sign in</span></div>
+              </div>
+            </div>
+            <div class="row"><button type="button" id="btn-ll-save" class="btn primary">Save</button>
+              <button type="button" id="btn-ll-full" class="btn">Full-screen preview</button>
+              <button type="button" id="btn-ll-reset" class="btn">Default look</button><span class="note" id="ll-state"></span></div>
           </div>
         </section>
 
@@ -227,6 +262,7 @@
             <div class="at-bar">
               <div class="at-chips" id="at-chips" role="radiogroup" aria-label="Show"></div>
               <input id="at-search" type="search" placeholder="Filter tasks" autocomplete="off" aria-label="Filter tasks">
+              <select id="at-sort" aria-label="Order"><option value="note">By note</option><option value="due">By due date</option><option value="priority">By priority</option></select>
             </div>
             <div id="at-list" class="at-list"></div>
           </div>
@@ -269,6 +305,45 @@
             <p class="note">As an admin you can see every user's public links and stop any of them.</p>
             <div id="shares-all-groups"></div>
             <p class="note" id="shares-all-empty" hidden>Nobody has shared anything.</p>
+          </div>
+        </section>
+
+        <section data-sec="attachments" class="set-body">
+          <p class="note">Files pasted or dropped into your notes (or added with ⋯ → Attach file). They live in the vault's hidden <code>.attachments</code> folder.</p>
+          <div class="row att-bar">
+            <input id="att-filter" type="search" placeholder="Filter by name" autocomplete="off" aria-label="Filter attachments">
+            <label class="check"><input type="checkbox" id="att-unused"> Only unused</label>
+            <button type="button" id="btn-att-clean" class="btn danger">Delete unused…</button>
+          </div>
+          <p class="note" id="att-summary"></p>
+          <ul id="att-list" class="list att-list"></ul>
+        </section>
+
+        <section data-sec="api" class="set-body">
+          <p class="note">Scripts and other apps can read and change your notes and checklist items through the REST API at
+            <code id="api-base">/api/v1</code>, with a token: <code>Authorization: Bearer tm_…</code>. Everything is JSON. Help → REST API has the details.</p>
+          <h4 class="sub-head first">Tokens</h4>
+          <ul id="api-tokens" class="list api-tokens"></ul>
+          <div class="row end api-new">
+            <label>Name <input id="api-token-name" maxlength="60" placeholder="Phone shortcut" autocomplete="off"></label>
+            <label>Can <select id="api-token-scope"><option value="write">read and change</option><option value="read">only read</option></select></label>
+            <label>Expires <select id="api-token-days"><option value="">never</option><option value="30">in 30 days</option><option value="90">in 90 days</option><option value="365">in a year</option></select></label>
+            <button type="button" id="btn-api-token" class="btn primary">Create token</button>
+          </div>
+          <div id="api-token-new" class="card api-token-new" hidden>
+            <p class="note"><b>Copy this token now.</b> It won't be shown again (only its first and last letters are kept).</p>
+            <div class="row"><code id="api-token-value"></code><button type="button" class="btn" id="btn-api-copy">Copy</button></div>
+          </div>
+          <h4 class="sub-head">Try it</h4>
+          <p class="note">Pick an endpoint, fill it in and send it. Requests from here use your session (no token), and act on your real notes.</p>
+          <div class="api-try">
+            <label>Endpoint <select id="api-ep"></select></label>
+            <p class="note" id="api-ep-summary"></p>
+            <div id="api-params" class="api-params"></div>
+            <label id="api-body-wrap">Body (JSON) <textarea id="api-body" rows="5" spellcheck="false"></textarea></label>
+            <div class="row"><button type="button" id="btn-api-send" class="btn primary">Send</button><span class="note" id="api-status"></span></div>
+            <label>As curl <textarea id="api-curl" rows="3" readonly spellcheck="false"></textarea></label>
+            <pre id="api-result" class="api-result" hidden></pre>
           </div>
         </section>
 
@@ -553,6 +628,7 @@
   <div id="login" hidden>
     <form id="login-form" class="login-card">
       <span class="brand"><img src="/icons/icon.svg" alt="" width="24" height="24"> <span class="brand-name">Tickmark</span></span>
+      <p id="login-message" class="login-message" hidden></p>
       <div id="login-local">
         <label>User name <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
         <label>Password <input name="password" type="password" autocomplete="current-password"></label>
@@ -561,6 +637,7 @@
       <p class="or" id="login-or"><span>or</span></p>
       <a id="login-sso" class="btn" href="/auth/oidc/login">Sign in with SSO</a>
       <p class="note err" id="login-msg" role="alert"></p>
+      <button type="button" id="login-preview-close" class="btn" hidden>Close preview</button>
     </form>
   </div>
 

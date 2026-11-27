@@ -7,8 +7,28 @@ import path from 'node:path';
 export const DEFAULT_NAME = 'Tickmark';
 const DEFAULT_ICON = '/icons/icon.svg';
 const MAX_IMAGE = 1024 * 1024;
+const MAX_BACKGROUND = 3 * 1024 * 1024; // the sign-in screen's background picture
 const TYPES = { 'image/png': 'png', 'image/svg+xml': 'svg', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/x-icon': 'ico', 'image/vnd.microsoft.icon': 'ico' };
-const IMAGES = ['logo', 'favicon'];
+const IMAGES = ['logo', 'favicon', 'loginbg'];
+const BUILT_IN_THEMES = ['light', 'dark', 'sepia', 'solarized-light', 'solarized-dark', 'nord', 'dracula', 'catppuccin-latte',
+  'catppuccin-frappe', 'catppuccin-macchiato', 'catppuccin-mocha', 'midnight', 'terminal'];
+const hexColour = (v) => (/^#[0-9a-f]{6}$/i.test(String(v || '')) ? String(v).toLowerCase() : null);
+
+/**
+ * The sign-in screen's look (admins, Settings → Appearance → Sign-in screen): a theme for it (or each
+ * visitor's own), an accent colour, a background colour or picture, and a short message.
+ */
+function cleanLogin(o = {}) {
+  const out = {};
+  if (BUILT_IN_THEMES.includes(o.theme)) out.theme = o.theme;
+  if (hexColour(o.accent)) out.accent = hexColour(o.accent);
+  if (hexColour(o.bg)) out.bg = hexColour(o.bg);
+  if (o.dim) out.dim = true;
+  const msg = String(o.message ?? '').replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (msg.length > 300) throw new BrandingError('Keep the sign-in message to 300 characters or fewer');
+  if (msg) out.message = msg;
+  return out;
+}
 
 export class BrandingError extends Error {
   constructor(msg) { super(msg); this.status = 400; }
@@ -36,6 +56,7 @@ export class Branding {
       favicon: url('favicon') || logo || DEFAULT_ICON,
       hasLogo: !!logo,
       hasFavicon: !!this.data.favicon,
+      login: { ...(this.data.login || {}), image: url('loginbg') },
     };
   }
 
@@ -49,6 +70,10 @@ export class Branding {
       if (name.length > 40) throw new BrandingError('Keep the name to 40 characters or fewer');
       if (name && name !== DEFAULT_NAME) next.name = name; else delete next.name;
     }
+    if (patch.login !== undefined) {
+      const login = patch.login === null ? {} : cleanLogin(patch.login);
+      if (Object.keys(login).length) next.login = login; else delete next.login;
+    }
     const writes = [];
     for (const k of IMAGES) {
       if (patch[k] === undefined) continue;
@@ -58,7 +83,8 @@ export class Branding {
       if (!ext) throw new BrandingError('Images must be PNG, SVG, JPEG, WebP, GIF or ICO');
       const buf = Buffer.from(m[2], 'base64');
       if (!buf.length) throw new BrandingError('That image is empty');
-      if (buf.length > MAX_IMAGE) throw new BrandingError('Images must be 1 MB or smaller');
+      if (k === 'loginbg' && ext === 'svg') throw new BrandingError('Use a PNG, JPEG, WebP or GIF for the background');
+      if (buf.length > (k === 'loginbg' ? MAX_BACKGROUND : MAX_IMAGE)) throw new BrandingError(k === 'loginbg' ? 'The background picture must be 3 MB or smaller' : 'Images must be 1 MB or smaller');
       next[k] = { type: m[1].toLowerCase(), ext, v: Date.now().toString(36) };
       writes.push([k, ext, buf]);
     }
@@ -100,6 +126,7 @@ export class Branding {
     const favType = this.data.favicon?.type || this.data.logo?.type || 'image/svg+xml';
     return src
       .replace('<title>Tickmark</title>', `<title>${esc(b.name)}</title>`)
+      .replace('<meta name="apple-mobile-web-app-title" content="Tickmark">', `<meta name="apple-mobile-web-app-title" content="${esc(b.name)}">`)
       // The default PNG icon goes: browsers would otherwise prefer it over a custom favicon.
       .replace(/\s*<link rel="icon" href="\/icons\/icon-192\.png"[^>]*>/, '')
       .replace(/<link rel="icon" href="[^"]*" type="[^"]*">/, `<link rel="icon" href="${esc(b.favicon)}" type="${esc(favType)}">`)

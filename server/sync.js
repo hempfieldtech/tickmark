@@ -11,9 +11,9 @@
 // Several CalDAV accounts can be configured. Each synced item belongs to exactly one, chosen by
 // accountFor(); sync state is kept per account, so retagging an item moves it between accounts.
 
-import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted, appendLines, openSubtasks, endCancelledSeries, cancelSubtasks } from '../public/shared/tasks.js';
+import { parseTasks, taskModel, modelsEqual, buildTaskLine, newBlockId, localDate, normTag, advanceRecurring, insertInSection, fileCompleted, appendLines, openSubtasks, endCancelledSeries, cancelSubtasks, autoSort } from '../public/shared/tasks.js';
 import { buildTodo, parseICS, findTodo, todoModel, occurrenceCompleted } from './ical.js';
-import { CalDAV } from './caldav.js';
+import { CalDAV, CalDAVError } from './caldav.js';
 import { fingerprint } from './secrets.js';
 
 const FIELDS = ['title', 'done', 'status', 'due', 'priority', 'recur'];
@@ -65,13 +65,44 @@ const COUNTS = ['pushed', 'pulled', 'created', 'imported', 'deletedRemote', 'del
 export class SyncEngine {
   constructor({ vault, index, getConfig, onStatus = () => {}, log = console.log, owner = null }) {
     Object.assign(this, { vault, index, getConfig, onStatus, log, owner });
-    this.status = { state: 'idle', lastRun: null, lastError: null, lastResult: null, needsForce: false };
+    // `reach`: whether the CalDAV servers answered the last check (see ping), null before the first.
+    this.status = { state: 'idle', lastRun: null, lastError: null, lastResult: null, needsForce: false, reach: null };
     this.running = null;
   }
 
   setStatus(patch) {
     Object.assign(this.status, patch);
     this.onStatus({ ...this.status });
+  }
+
+  /**
+   * Check that each account's CalDAV server answers (a small PROPFIND on its task list), without
+   * syncing. The result goes in status.reach: { ok, at, down: [{ name, error }] }; it only broadcasts
+   * when that changes. Only a server that doesn't answer (or answers with a 5xx) counts as down: a
+   * wrong password shows up as a sync problem instead.
+   */
+  async ping() {
+    if (this.running || this.pinging) return this.status.reach;
+    const accounts = (this.getConfig().accounts || []).filter((a) => a.url && a.calendarUrl);
+    if (!accounts.length) { if (this.status.reach) this.setStatus({ reach: null }); return null; }
+    this.pinging = true;
+    try {
+      const down = [];
+      await Promise.all(accounts.map(async (a) => {
+        try { await new CalDAV({ ...a, owner: this.owner }).propfind(a.calendarUrl, '<d:resourcetype/>', 0); }
+        catch (e) { if (!(e instanceof CalDAVError) || e.status === 0 || e.status >= 500) down.push({ name: a.name || new URL(a.url).host, error: e.message }); }
+      }));
+      this.setReach(down);
+      return this.status.reach;
+    } finally { this.pinging = false; }
+  }
+
+  setReach(down) {
+    const was = this.status.reach;
+    const reach = { ok: !down.length, at: new Date().toISOString(), down };
+    // Only tell the clients when something changed (not every minute that it's still fine).
+    if (!was || was.ok !== reach.ok || JSON.stringify(was.down) !== JSON.stringify(reach.down)) this.setStatus({ reach });
+    else this.status.reach = reach;
   }
 
   run(opts = {}) {
@@ -96,12 +127,15 @@ export class SyncEngine {
           e.result = r;
           throw e;
         }
-        this.setStatus({ state: 'idle', lastRun: new Date().toISOString(), lastError: null, lastResult: r, needsForce: false });
+        this.setStatus({ state: 'idle', lastRun: new Date().toISOString(), lastError: null, lastResult: r, needsForce: false,
+          reach: { ok: true, at: new Date().toISOString(), down: [] } });
         return r;
       })
       .catch((e) => {
+        // Accounts whose server couldn't be reached at all are down; ones that answered are up.
+        const unreachable = (e.result?.accounts || []).filter((a) => a.unreachable).map((a) => ({ name: a.name, error: a.error }));
         this.setStatus({ state: 'error', lastRun: new Date().toISOString(), lastError: e.message, needsForce: !!e.needsForce,
-          ...(e.result ? { lastResult: e.result } : {}) });
+          ...(e.result ? { lastResult: e.result, reach: { ok: !unreachable.length, at: new Date().toISOString(), down: unreachable } } : {}) });
         throw e;
       })
       .finally(() => { this.running = null; });
@@ -130,17 +164,17 @@ export class SyncEngine {
       this.vault.modify(p, (text) => {
         let lines = text.split('\n');
         let changed = false;
-        // Bottom-up, because each one inserts a history line below itself.
-        for (const t of parseTasks(text, tagOpts).reverse()) {
+        // A completed recurring task moves on to its next date.
+        for (const t of parseTasks(text, tagOpts)) {
           if (!t.synced || !t.done || !t.recur || t.status === 'cancelled') continue; // cancelled ends the series
           const a = advanceRecurring(t, { today });
           if (!a) continue; // series over: it stays completed
-          lines.splice(t.line, 1, a.openLine, a.historyLine);
+          lines[t.line] = a.openLine;
           changed = true;
         }
         for (const t of parseTasks(lines.join('\n'), tagOpts)) {
           if (!t.synced) { if (t.blockId) seen.add(t.blockId); continue; }
-          // Already done before it ever synced (including recurring history lines): keep it local.
+          // Already done before it ever synced: keep it local.
           if (t.done && !t.blockId) continue;
           if (t.blockId && !seen.has(t.blockId)) { seen.add(t.blockId); continue; }
           let id;
@@ -176,6 +210,7 @@ export class SyncEngine {
       } catch (e) {
         entry.error = e.message;
         if (e.needsForce) entry.needsForce = true;
+        if (e instanceof CalDAVError && (e.status === 0 || e.status >= 500)) entry.unreachable = true;
       }
       const { log, ...counts } = r;
       Object.assign(entry, counts);
@@ -354,12 +389,10 @@ export class SyncEngine {
           // Not done while it has unchecked sub-items in the note: completing it elsewhere is undone.
           // Cancelling it is fine: its unfinished sub-items are cancelled with it (when it's written below).
           if (m.done && !L.model.done && L.openSubtasks && m.status !== 'cancelled') m = { ...m, done: false };
-          // Completed elsewhere: a recurring todo moves on to its next date on both sides, and the
-          // note keeps a completed copy as history.
-          let history = null;
+          // Completed elsewhere: a recurring todo moves on to its next date on both sides.
           if (m.done && m.recur && !L.model.done) {
             const a = advanceRecurring({ ...L.task, ...m }, { doneDate: R.doneDate || today, today });
-            if (a) { m = a.open; history = a.historyLine; }
+            if (a) m = a.open;
           }
           let etag = R.etag;
           const moved = R.fromNote && R.fromNote !== L.path; // the note was renamed or moved
@@ -372,8 +405,8 @@ export class SyncEngine {
             }
           }
           const st = { block_id: bid, uid: R.uid, href: rel(R.url), etag, base: m, path: L.path, section: L.task.section };
-          if (!modelsEqual(m, L.model) || history) {
-            addOp(L.path, { type: 'update', bid, expect: L.model, model: m, doneDate: m.done ? (R.doneDate || today) : null, history, state: st });
+          if (!modelsEqual(m, L.model)) {
+            addOp(L.path, { type: 'update', bid, expect: L.model, model: m, doneDate: m.done ? (R.doneDate || today) : null, state: st });
           } else stateWrites.push({ set: st });
         } else if (L && S && !R) {
           if (modelsEqual(L.model, S.base)) {
@@ -441,7 +474,6 @@ export class SyncEngine {
         const keep = text ? 0 : lines.length; // don't trim the blank line under a fresh heading
         const tasks = new Map(parseTasks(lines.join('\n'), tagOpts).filter((t) => t.blockId).map((t) => [t.blockId, t]));
         const remove = new Set();
-        const insertAfter = new Map(); // line → extra line (recurring history)
         const appends = [];
         const cancelLines = []; // items cancelled in the task app: their unfinished sub-items go too
         for (const op of ops) {
@@ -459,7 +491,6 @@ export class SyncEngine {
           if (op.type === 'update') {
             lines[t.line] = buildTaskLine(t, op.model, { doneDate: op.doneDate || t.doneDate });
             if (op.model.status === 'cancelled' && op.expect.status !== 'cancelled') cancelLines.push(t.line);
-            if (op.history) insertAfter.set(t.line, op.history);
             result.pulled++;
             result.log.push({ dir: 'received', kind: 'updated', title: op.model.title, path, changes: changes(op.expect, op.model) });
           } else if (op.type === 'delete') {
@@ -475,9 +506,7 @@ export class SyncEngine {
           for (const at of cancelLines) t = cancelSubtasks(t, at); // same line count, so the numbers below hold
           lines = t.split('\n');
         }
-        if (remove.size || insertAfter.size) {
-          lines = lines.flatMap((l, i) => (remove.has(i) ? [] : insertAfter.has(i) ? [l, insertAfter.get(i)] : [l]));
-        }
+        if (remove.size) lines = lines.filter((l, i) => !remove.has(i));
         if (appends.length) lines = appendLines(lines, appends, { keep });
         if (!applied.length) return null;
         let out = lines.join('\n');
@@ -486,11 +515,12 @@ export class SyncEngine {
         if (this.getConfig().moveCompleted !== false) {
           for (const op of applied) {
             const cancelled = (x) => x.status === 'cancelled';
-            if (op.type !== 'update' || op.history || (!!op.expect.done === !!op.model.done && cancelled(op.expect) === cancelled(op.model))) continue;
+            if (op.type !== 'update' || (!!op.expect.done === !!op.model.done && cancelled(op.expect) === cancelled(op.model))) continue;
             const at = out.split('\n').findIndex((l) => l.trimEnd().endsWith(' ^' + op.bid));
             if (at >= 0) out = fileCompleted(out, at) ?? out;
           }
         }
+        out = autoSort(out); // a note that keeps its tasks sorted (sort-tasks: in its frontmatter)
         if (!out.endsWith('\n')) out += '\n';
         return out;
       });

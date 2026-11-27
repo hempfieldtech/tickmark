@@ -9,6 +9,7 @@ import { Config } from './config.js';
 import { SyncEngine } from './sync.js';
 import { movedNotes, rewriteLinks } from './links.js';
 import { History } from './history.js';
+import { Attachments } from './attachments.js';
 
 /** How long after a file changes outside Tickmark to sync it (editors often write in several steps). */
 const EXTERNAL_SYNC_DELAY = Number(process.env.TICKMARK_EXTERNAL_SYNC_MS) || 3000;
@@ -26,6 +27,7 @@ export class Workspace {
     this.name = name;
     this.dataDir = dataDir;
     this.vaultDir = vaultDir;
+    this.attachments = new Attachments(vaultDir);
     this.clients = new Set();
     // Live collaboration: who has which note open (by browser tab), and public-link viewers.
     this.presence = new Map(); // tab id → { id, name, device, path, line, at }
@@ -66,6 +68,12 @@ export class Workspace {
     });
     this.serverTimer = null;
     this.scheduleServerSync();
+    // While someone has the app open, check every so often that the CalDAV servers answer, so the
+    // sync status can say so between syncs (TICKMARK_CALDAV_PING_SECONDS, 0 turns it off).
+    const pingSecs = Number(process.env.TICKMARK_CALDAV_PING_SECONDS ?? 60);
+    this.pingMs = pingSecs > 0 ? Math.max(15, pingSecs) * 1000 : 0;
+    this.pingTimer = this.pingMs ? setInterval(() => { if (this.clients.size) this.sync.ping().catch(() => {}); }, this.pingMs) : null;
+    this.pingTimer?.unref?.();
     this.history.changed(); // record the vault as it is at start (edits made while Tickmark was off)
   }
 
@@ -155,6 +163,7 @@ export class Workspace {
     const linking = this.index.db.prepare('SELECT DISTINCT src FROM links').all().map((r) => r.src);
     this.vault.rename(from, to);
     if (!moved.size) return [];
+    this.attachments.notesMoved([...moved]); // files pasted into them still belong to them
     const after = before.map((p) => moved.get(p) || p);
     const updated = [];
     for (const src of linking) {
@@ -185,6 +194,7 @@ export class Workspace {
     clearTimeout(this.scanTimer);
     clearTimeout(this.externalSyncTimer);
     clearInterval(this.serverTimer);
+    clearInterval(this.pingTimer);
     this.watcher?.close();
     for (const res of this.clients) res.end();
     this.clients.clear();

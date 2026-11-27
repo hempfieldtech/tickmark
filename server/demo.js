@@ -19,7 +19,7 @@ const COOKIE = 'tm_demo';
 const BLOCKED = [
   /^POST \/api\/caldav\//, /^POST \/api\/sync$/, /^(GET|POST|PUT|DELETE) \/api\/shares/, /^PUT \/api\/branding$/,
   /^\w+ \/api\/admin\//, /^\w+ \/api\/users/, /^\w+ \/api\/account\//, /^POST \/api\/setup\//,
-  /^POST \/api\/auth\/(login|logout)$/,
+  /^POST \/api\/auth\/(login|logout)$/, /^\w+ \/api\/tokens$/,
 ];
 export const demoBlocked = (key) => BLOCKED.some((r) => r.test(key));
 

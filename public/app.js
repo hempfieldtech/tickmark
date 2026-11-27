@@ -1,5 +1,5 @@
 import { marked } from './vendor/marked.esm.js';
-import { checkboxLines, changeItem, parseTasks, normTag, localDate } from './shared/tasks.js';
+import { checkboxLines, changeItem, parseTasks, normTag, localDate, sortTasks, sortKeysFrom, SORT_KEYS } from './shared/tasks.js';
 import { parseRecurrence, describeRecurrence } from './shared/recur.js';
 import { textStats } from './shared/words.js';
 import { parseFrontmatter, writeFrontmatter } from './shared/frontmatter.js';
@@ -43,6 +43,15 @@ const basename = (p) => p.split('/').pop().replace(/\.md$/i, '');
 const dirname = (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
 const joinPath = (dir, name) => (dir ? `${dir}/${name}` : name);
 const mobile = matchMedia('(max-width: 760px)');
+
+/** What a link to a file is, by its extension: image, video, audio, or (for an attachment) file. */
+function mediaKind(href) {
+  const ext = (String(href).split(/[?#]/)[0].match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
+  if (/^(mp4|webm|mov|m4v|ogv)$/.test(ext)) return 'video';
+  if (/^(mp3|m4a|ogg|oga|wav|flac|aac|opus)$/.test(ext)) return 'audio';
+  if (/^(png|jpe?g|gif|webp|avif|svg|bmp|ico)$/.test(ext) || !String(href).startsWith('/attachments/')) return 'image';
+  return 'file';
+}
 
 async function api(method, url, body) {
   const r = await fetch(url, {
@@ -160,6 +169,11 @@ marked.use({
     },
     image({ href, title, text }) {
       if (!safeUrl(href)) return esc(text);
+      // Attachments: audio and video play in place, a PDF or other file is a link to it.
+      const kind = mediaKind(href);
+      if (kind === 'video') return `<video src="${esc(href)}" controls preload="metadata"${title ? ` title="${esc(title)}"` : ''}></video>`;
+      if (kind === 'audio') return `<audio src="${esc(href)}" controls preload="metadata"></audio>`;
+      if (kind === 'file') return `<a href="${esc(href)}" class="attachment-link">📎 ${esc(text || decodeURIComponent(href.split('/').pop()))}</a>`;
       return `<img src="${esc(href)}" alt="${esc(text)}"${title ? ` title="${esc(title)}"` : ''} loading="lazy">`;
     },
   },
@@ -173,7 +187,8 @@ marked.use({
       },
       renderer(t) {
         // ![[Note]] (or ![[Note#Heading]]) shows that note inside this one; filled in after rendering.
-        if (t.raw.startsWith('!')) return `<span class="embed" data-target="${esc(t.target)}"></span>`;
+        // ![[Note|kanban]] shows its checklist as a board instead.
+        if (t.raw.startsWith('!')) return `<span class="embed" data-target="${esc(t.target)}"${/^kanban$/i.test(t.label) ? ' data-view="kanban"' : ''}></span>`;
         return `<a href="#" class="wikilink" data-target="${esc(t.target)}">${esc(t.label)}</a>`;
       },
     },
@@ -321,6 +336,17 @@ async function fillEmbeds(root, chain) {
     body.dataset.scope = ++embedSeq; // its own CSS styles only this embed (see shared/html.js)
     if (!f) { box.classList.add('missing'); body.textContent = 'No such note yet.'; continue; }
     if (chain.includes(f.path) || chain.length > 3) { body.textContent = chain.includes(f.path) ? 'Embeds itself, so it isn\'t shown here.' : 'Nested too deep to show.'; continue; }
+    if (box.dataset.view === 'kanban') {
+      box.classList.add('kanban-embed');
+      try {
+        const full = await embedText(f.path);
+        if (S.path !== path0) return;
+        const sec = heading ? sectionOf(full, heading) : null;
+        if (heading && !sec) { body.textContent = `No heading “${heading}” in ${basename(f.path)}.`; continue; }
+        renderKanban(body, f.path, full, sec ? { from: sec.start, to: sec.start + sec.text.split('\n').length } : null);
+      } catch (e) { body.textContent = `Couldn't load it: ${e.message}`; }
+      continue;
+    }
     try {
       const full = await embedText(f.path);
       let text, lines;
@@ -356,6 +382,149 @@ async function fillEmbeds(root, chain) {
     } catch (e) { body.textContent = `Couldn't load it: ${e.message}`; }
   }
 }
+
+// ---- kanban boards: ![[Note|kanban]] (or ![[Note#Heading|kanban]]) shows that note's checklist
+// items as cards in To do / In progress / Done / Cancelled columns. Dragging a card to a column sets
+// its state, by the same rules as clicking it (sub-items first to finish it; cancelling cancels them;
+// finished items filed under Complete / Cancelled); dropping it on a card in To do or In progress
+// puts it there in the note. Sub-items show on their card and can be ticked there.
+const KANBAN_COLS = [[' ', 'To do'], ['/', 'In progress'], ['x', 'Done'], ['-', 'Cancelled']];
+const KB_ITEM = /^(\s*)(?:[-*+]|\d+[.)])\s+\[([ xX/-])\](?:\s+(.*))?$/;
+/** Cards from a note's lines (within `range`): top-level checklist items with their sub-items. */
+function kanbanCards(text, range) {
+  const lines = text.split('\n');
+  const from = range?.from ?? 0, to = range?.to ?? lines.length;
+  const cards = [];
+  let fence = false, fmEnd = -1;
+  if (lines[0]?.trim() === '---') fmEnd = lines.findIndex((l, i) => i > 0 && /^(---|\.\.\.)\s*$/.test(l));
+  for (let i = Math.max(from, fmEnd + 1); i < to; i++) {
+    if (/^\s*(`{3,}|~{3,})/.test(lines[i])) { fence = !fence; continue; }
+    if (fence) continue;
+    const m = lines[i].match(KB_ITEM);
+    if (!m) continue;
+    const ind = m[1].length;
+    const c = { line: i, ch: m[2] === 'X' ? 'x' : m[2], body: m[3] || '', indent: ind, subs: [], end: i };
+    // Its block runs over the more-indented lines under it.
+    let j = i + 1;
+    while (j < to && lines[j].trim() && lines[j].match(/^\s*/)[0].length > ind) {
+      const sm = lines[j].match(KB_ITEM);
+      if (sm) c.subs.push({ line: j, ch: sm[2], text: sm[3] || '' });
+      j++;
+    }
+    c.end = j - 1;
+    cards.push(c);
+    i = j - 1;
+  }
+  return cards;
+}
+function cardBits(body) {
+  const due = body.match(/(?:📅|due:)\s*(\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?)/u)?.[1] || null;
+  const prio = body.match(/(🔺|⏫|🔼|🔽|⏬)/u)?.[1] || '';
+  const recur = /🔁/u.test(body);
+  const title = body.replace(/\s*\^[A-Za-z0-9-]+\s*$/, '').replace(/(?:📅|due:)\s*\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?/gu, '')
+    .replace(/✅\s*\d{4}-\d{2}-\d{2}/gu, '').replace(/🔁\s*.+?(?=\s+(?:📅|due:|✅|⏫|🔼|🔽|🔺|⏬|#)|$)/u, '').replace(/[🔺⏫🔼🔽⏬]/gu, '').replace(/\s+/g, ' ').trim();
+  return { due, prio, recur, title };
+}
+function renderKanban(body, path, text, range) {
+  const cards = kanbanCards(text, range);
+  const today = localDate(new Date());
+  const inline = (s) => esc(s).replace(/(^|\s)#([\p{L}\p{N}_/-]*[\p{L}_/-][\p{L}\p{N}_/-]*)/gu, '$1<span class="kb-tag">#$2</span>');
+  body.classList.add('kanban');
+  body.dataset.path = path;
+  body.innerHTML = cards.length ? KANBAN_COLS.map(([ch, name]) => {
+    const list = cards.filter((c) => c.ch === ch);
+    return `<section class="kb-col" data-ch="${ch === ' ' ? 'todo' : ch}" aria-label="${esc(name)}"><h6>${esc(name)} <b>${list.length}</b></h6><div class="kb-cards">` +
+      list.map((c) => {
+        const b = cardBits(c.body);
+        const doneSubs = c.subs.filter((x) => 'xX-'.includes(x.ch)).length;
+        const overdue = b.due && b.due.slice(0, 10) < today && (ch === ' ' || ch === '/');
+        return `<article class="kb-card" draggable="true" data-line="${c.line}" tabindex="0">` +
+          `<div class="kb-top"><span class="kb-title">${inline(b.title || '(empty)')}</span>` +
+          `<button type="button" class="kb-more" aria-label="Move or open" title="Move to…">⋯</button></div>` +
+          ((b.due || b.prio || b.recur || c.subs.length) ? `<div class="kb-meta">${b.prio ? `<span>${b.prio}</span>` : ''}${b.due ? `<span class="${overdue ? 'overdue' : ''}">📅 ${esc(b.due)}</span>` : ''}` +
+            `${b.recur ? '<span title="Repeats">🔁</span>' : ''}${c.subs.length ? `<span class="kb-progress" title="Sub-items done">${doneSubs}/${c.subs.length}</span>` : ''}</div>` : '') +
+          (c.subs.length ? `<ul class="kb-subs">${c.subs.map((x) => `<li class="${x.ch === '-' ? 'cancelled' : 'xX'.includes(x.ch) ? 'done' : ''}"><input type="checkbox" class="kb-sub" data-line="${x.line}"${'xX-'.includes(x.ch) ? ' checked' : ''}${x.ch === '/' ? ' data-progress' : ''} aria-label="${esc(cardBits(x.text).title)}"><span>${inline(cardBits(x.text).title)}</span></li>`).join('')}</ul>` : '') +
+          '</article>';
+      }).join('') + '</div></section>';
+  }).join('') : `<p class="note">No checklist items in ${esc(basename(path))}${range ? ' under that heading' : ''} yet.</p>`;
+  body.querySelectorAll('input[data-progress]').forEach((x) => (x.indeterminate = true));
+}
+/** Change a card's state, and/or move it above another card, in the note. */
+function kanbanMove(path, line, ch, beforeLine = null) {
+  editEmbedded(path, (text) => {
+    let t = text, at = line;
+    if (beforeLine != null && beforeLine !== line) {
+      const cards = kanbanCards(t);
+      const card = cards.find((c) => c.line === line), target = cards.find((c) => c.line === beforeLine);
+      if (card && target) {
+        const lines = t.split('\n');
+        const block = lines.splice(card.line, card.end - card.line + 1);
+        const dest = target.line > card.line ? target.line - block.length : target.line;
+        lines.splice(dest, 0, ...block.map((l) => ' '.repeat(target.indent) + l.slice(card.indent)));
+        t = lines.join('\n');
+        at = dest;
+      }
+    }
+    const cur = t.split('\n')[at]?.match(KB_ITEM)?.[2];
+    if (ch != null && cur != null && (cur === 'X' ? 'x' : cur) !== ch) t = changeTask(t, at, ch);
+    return t;
+  });
+}
+el.preview.addEventListener('dragstart', (e) => {
+  const card = e.target.closest?.('.kb-card');
+  if (!card) return;
+  e.dataTransfer.setData('application/x-tickmark-card', JSON.stringify({ path: card.closest('.kanban').dataset.path, line: +card.dataset.line }));
+  e.dataTransfer.effectAllowed = 'move';
+  card.classList.add('dragging');
+});
+el.preview.addEventListener('dragend', (e) => {
+  e.target.closest?.('.kb-card')?.classList.remove('dragging');
+  el.preview.querySelectorAll('.kb-over, .kb-before').forEach((x) => x.classList.remove('kb-over', 'kb-before'));
+});
+el.preview.addEventListener('dragover', (e) => {
+  const col = e.target.closest?.('.kb-col');
+  if (!col || !e.dataTransfer.types.includes('application/x-tickmark-card')) return;
+  e.preventDefault();
+  el.preview.querySelectorAll('.kb-over, .kb-before').forEach((x) => x.classList.remove('kb-over', 'kb-before'));
+  col.classList.add('kb-over');
+  const over = e.target.closest('.kb-card');
+  if (over && ['todo', '/'].includes(col.dataset.ch)) over.classList.add('kb-before');
+});
+el.preview.addEventListener('drop', (e) => {
+  const col = e.target.closest?.('.kb-col');
+  const raw = e.dataTransfer?.getData('application/x-tickmark-card');
+  if (!col || !raw) return;
+  e.preventDefault();
+  const { path, line } = JSON.parse(raw);
+  if (col.closest('.kanban').dataset.path !== path) return toast('Cards move within their own board');
+  const ch = col.dataset.ch === 'todo' ? ' ' : col.dataset.ch;
+  const over = e.target.closest('.kb-card');
+  kanbanMove(path, line, ch, over && (ch === ' ' || ch === '/') ? +over.dataset.line : null);
+});
+el.preview.addEventListener('click', (e) => {
+  const sub = e.target.closest?.('.kb-sub');
+  const board = e.target.closest?.('.kanban');
+  if (!board) return;
+  if (sub) { e.preventDefault(); e.stopPropagation(); editEmbedded(board.dataset.path, (t) => toggleTask(t, +sub.dataset.line)); return; }
+  const more = e.target.closest('.kb-more');
+  const card = e.target.closest('.kb-card');
+  if (!card) return;
+  const line = +card.dataset.line, path = board.dataset.path;
+  if (more) {
+    e.preventDefault();
+    const cur = card.closest('.kb-col').dataset.ch;
+    showMenu(more, [
+      ...KANBAN_COLS.filter(([ch]) => (ch === ' ' ? 'todo' : ch) !== cur).map(([ch, name]) => ({ label: `Move to ${name}`, run: () => kanbanMove(path, line, ch) })),
+      { label: 'Open in its note', run: () => open(path, { line }) },
+    ]);
+    return;
+  }
+  if (e.target.closest('.kb-title') && !e.target.closest('.kb-tag')) open(path, { line });
+}, true);
+el.preview.addEventListener('keydown', (e) => {
+  const card = e.target.closest?.('.kb-card');
+  if (card && (e.key === 'Enter' || e.key === ' ') && e.target === card) { e.preventDefault(); card.querySelector('.kb-more').click(); }
+});
 
 // ---- collapsible headings in the preview (remembered per note, on this device)
 const foldKey = (h) => `${h.tagName}:${h.textContent.trim()}`;
@@ -491,6 +660,84 @@ function replaceRange(start, end, text) {
   const ok = text ? document.execCommand('insertText', false, text) : document.execCommand('delete');
   if (!ok) { ed.setRangeText(text, start, end, 'end'); onEdited(); }
 }
+
+// ---- sorting checklist items (⋯ → Sort tasks…): once, or kept sorted via `sort-tasks:` in the frontmatter
+function sortNote(keys) {
+  if (S.mode !== 'note') return;
+  const next = sortTasks(el.editor.value, keys);
+  if (next === el.editor.value) return toast('Already in that order');
+  applyEdit(next);
+  toast(`Sorted by ${keys.map((k) => SORT_KEYS[k].toLowerCase()).join(', then ')}`);
+}
+function keepSorted(keys) {
+  const fm = parseFrontmatter(el.editor.value);
+  const entries = fm.entries.filter((e) => e.key?.toLowerCase() !== 'sort-tasks');
+  if (keys.length) entries.push({ key: 'sort-tasks', kind: 'text', value: keys.join(', ') });
+  const text = writeFrontmatter(fm.body, entries);
+  applyEdit(keys.length ? sortTasks(text, keys) : text);
+  toast(keys.length ? `This note's tasks stay sorted by ${keys.map((k) => SORT_KEYS[k].toLowerCase()).join(', then ')}` : 'No longer kept sorted');
+}
+function openSortPicker() {
+  const kept = sortKeysFrom(el.editor.value);
+  const items = [
+    ...Object.entries(SORT_KEYS).map(([k, name]) => ({ label: `Sort by ${name.toLowerCase()}`, detail: k === 'due' ? 'undated last' : k === 'priority' ? 'highest first' : k === 'state' ? 'in progress, to do, done, cancelled' : 'A to Z', run: () => sortNote([k]) })),
+    { label: 'Sort by due date, then priority', run: () => sortNote(['due', 'priority']) },
+    ...Object.entries(SORT_KEYS).filter(([k]) => kept.join() !== k).map(([k, name]) => ({ label: `Keep sorted by ${name.toLowerCase()}`, detail: 'sort-tasks in the frontmatter', run: () => keepSorted([k]) })),
+    ...(kept.length ? [{ label: 'Stop keeping it sorted', detail: `now: ${kept.join(', ')}`, run: () => keepSorted([]) }] : []),
+  ];
+  openPicker((q) => items.filter((it) => !q || it.label.toLowerCase().includes(q.toLowerCase())), 'Sort this note\'s tasks…');
+}
+
+// ---- attachments: paste or drop a file (a screenshot, a PDF…) into the editor, or ⋯ → Attach file.
+// It's saved in the vault's hidden .attachments folder and linked where the cursor is.
+const readAsDataUrl = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsDataURL(f); });
+async function attachFiles(files, at = null) {
+  if (S.mode !== 'note' || !files.length) return;
+  const links = [];
+  for (const f of files) {
+    if (f.size > 200 * 1024 * 1024) { toast(`${f.name} is too large to attach`); continue; } // the server's limit is usually lower, and says so
+    // Pasted screenshots are all called image.png: name them by the time instead.
+    const d = new Date(), two = (n) => String(n).padStart(2, '0');
+    const stamp = `${localDate(d)}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+    const name = /^image\.\w+$/i.test(f.name) || !f.name ? `pasted-${stamp}.${(f.type.split('/')[1] || 'bin').replace('jpeg', 'jpg').replace(/\W.*$/, '')}` : f.name;
+    toast(`Attaching ${name}…`);
+    try {
+      const r = await api('POST', '/api/attachments', { name, note: S.path, data: (await readAsDataUrl(f)).replace(/^data:[^,]*,/, '') });
+      const label = name.replace(/\.[^.]*$/, '').replace(/[[\]]/g, '');
+      links.push(`![${label}](${r.url})`);
+    } catch (e) { toast(`${name}: ${e.message}`); }
+  }
+  if (!links.length) return;
+  const ed = el.editor;
+  const start = at ?? ed.selectionStart, end = at ?? ed.selectionEnd;
+  const before = ed.value.slice(0, start);
+  const text = (before && !before.endsWith('\n') ? '\n' : '') + links.join('\n') + '\n';
+  replaceRange(start, end, text);
+  onEdited({ now: true }); // saved straight away, so the file shows as used
+  toast(links.length > 1 ? `Attached ${links.length} files` : 'Attached');
+}
+function pickAttachment() {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.multiple = true;
+  inp.onchange = () => attachFiles([...inp.files]);
+  inp.click();
+}
+el.editor.addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (!files.length) return; // plain text pastes as usual
+  e.preventDefault();
+  attachFiles(files);
+});
+el.editor.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); el.editor.classList.add('drop-file'); } });
+el.editor.addEventListener('dragleave', () => el.editor.classList.remove('drop-file'));
+el.editor.addEventListener('drop', (e) => {
+  el.editor.classList.remove('drop-file');
+  const files = [...(e.dataTransfer?.files || [])];
+  if (!files.length) return;
+  e.preventDefault();
+  el.editor.focus();
+  attachFiles(files);
+});
 
 function onEdited({ now = false } = {}) {
   if (!now) S.lastInputAt = Date.now();
@@ -848,7 +1095,7 @@ el.preview.addEventListener('click', (e) => {
   const a = e.target.closest('a[href]');
   if (a) {
     const href = a.getAttribute('href');
-    if (/^https?:|^mailto:/i.test(href)) { a.target = '_blank'; a.rel = 'noopener'; return; }
+    if (/^https?:|^mailto:|^\/attachments\//i.test(href)) { a.target = '_blank'; a.rel = 'noopener'; return; }
     if (!href.startsWith('#') && /\.md(#.*)?$/i.test(href)) {
       e.preventDefault();
       const rel = decodeURI(href.replace(/#.*$/, ''));
@@ -1540,10 +1787,12 @@ $('#btn-more').onclick = (e) => {
   if (S.mode !== 'note') return;
   showMenu(e.currentTarget, [
     { label: 'Apply template…', expand: (b) => expandTemplatePicker(b) },
+    { label: 'Attach file…', run: () => pickAttachment() },
     { label: 'Deleted tasks…', run: () => openDeleted({ path: S.path }) },
     { label: 'History…', run: () => openHistory() },
     { label: 'Properties…', run: () => openProps() },
     { label: 'Share…', demoOff: true, run: () => openShare(S.path, false) },
+    { label: 'Sort tasks…', run: () => setTimeout(openSortPicker) },
     { label: 'Move to trash', danger: true, run: () => trashPath(S.path, false) },
   ]);
 };
@@ -1652,6 +1901,8 @@ function commands() {
       { id: 'note-move', label: 'Note: Move to folder…', run: () => moveToFolder(S.path) },
       { id: 'note-template', label: 'Note: Apply template…', run: () => setTimeout(() => openPicker(templateItems, 'Apply template…')) },
       { id: 'note-props', label: 'Note: Properties…', run: () => openProps() },
+      { id: 'note-attach', label: 'Note: Attach file…', run: () => pickAttachment() },
+      ...Object.entries(SORT_KEYS).map(([k, name]) => ({ id: 'note-sort-' + k, label: `Note: Sort tasks by ${name.toLowerCase()}`, run: () => sortNote([k]) })),
       { id: 'note-history', label: 'Note: History…', run: () => openHistory() },
       { id: 'note-share', label: 'Note: Share…', demoOff: true, run: () => openShare(S.path, false) },
       { id: 'note-deleted', label: 'Note: Deleted tasks…', run: () => openDeleted({ path: S.path }) },
@@ -1739,6 +1990,15 @@ function renderSyncButton() {
   if (S.me?.demo) { label.textContent = 'Demo: sync is off'; b.title = 'CalDAV sync is turned off in this demo. Your notes here are a private sandbox, wiped after a while unused.'; return; }
   if (!syncConfigured()) { label.textContent = 'Set up CalDAV sync'; b.title = 'Connect a CalDAV task list'; return; }
   if (st.state === 'syncing') { b.classList.add('syncing'); label.textContent = 'Syncing…'; return; }
+  // The server checks every minute or so that the CalDAV servers answer (see SyncEngine.ping).
+  if (st.reach && !st.reach.ok) {
+    b.classList.add('error', 'unreachable');
+    const d = st.reach.down || [];
+    label.textContent = d.length === 1 && S.config?.accounts?.length > 1 ? `${d[0].name} unreachable` : 'CalDAV unreachable';
+    b.title = `Can't reach ${d.length > 1 ? 'these CalDAV servers' : 'the CalDAV server'} (checked ${relTime(st.reach.at)}):\n` +
+      d.map((x) => `${x.name}: ${x.error}`).join('\n') + '\n\nYour notes are fine; tasks sync again once it answers. Click to try now.';
+    return;
+  }
   if (st.state === 'error') { b.classList.add('error'); label.textContent = 'Sync problem'; b.title = (st.lastError ? st.lastError + '\n\n' : '') + nextSyncText(); return; }
   b.classList.add('ok');
   label.textContent = st.lastRun ? `Synced ${relTime(st.lastRun)}` : 'Ready to sync';
@@ -1898,14 +2158,14 @@ async function discover(box) {
 // The settings pane: a menu of sections. CalDAV accounts and Sync share one form and Save button;
 // the others act immediately (account, users) or have their own Save (single sign-on).
 const SECTIONS = {
-  about: 'About', account: 'Account', appearance: 'Appearance', caldav: 'CalDAV accounts', deleted: 'Deleted tasks', editor: 'Editor',
+  about: 'About', account: 'Account', api: 'API', appearance: 'Appearance', attachments: 'Attachments', caldav: 'CalDAV accounts', deleted: 'Deleted tasks', editor: 'Editor',
   shares: 'Public links', sso: 'Single sign-on', templates: 'Templates', users: 'Users',
 };
 const setDlg = $('#dlg-settings');
 const isMulti = () => S.me?.mode === 'multi' && !!S.me.user;
 const isAdmin = () => isMulti() && !!S.me.user.admin;
 
-const DEMO_HIDDEN = new Set(['caldav', 'users', 'sso', 'shares', 'account']);
+const DEMO_HIDDEN = new Set(['caldav', 'users', 'sso', 'shares', 'account', 'api']);
 function sectionVisible(sec) {
   if (S.me?.demo && DEMO_HIDDEN.has(sec)) return false; // the demo server refuses these anyway
   if (sec === 'account') return isMulti() && !!S.me.user.hasPassword; // nothing to manage without a password
@@ -1935,12 +2195,236 @@ function showSection(sec) {
   if (sec === 'deleted') loadDeleted('set');
   if (sec === 'templates') renderTemplates();
   if (sec === 'about') { loadAbout(); loadAboutTasks(); }
+  if (sec === 'api') loadApi();
+  if (sec === 'attachments') loadAttachments();
   if (sec === 'editor') { $('#opt-vim').checked = S.vim; $('#opt-lines').checked = S.lineNumbers; $('#opt-zen').checked = S.zen; }
   $('#btn-logout').hidden = !isMulti();
+  renderSubnav();
+  setTimeout(renderSubnav, 400); // sections that load their content (Users, SSO…) may add or hide headings
 }
+
+// ---- Settings navigation as a tree: the open section lists its headings (and, for CalDAV, its
+// accounts) underneath; picking another section folds this one away. Clicking one scrolls to it,
+// and the one in view is marked as you scroll.
+const sectionBody = (sec) => (sec === 'caldav' ? form : setDlg.querySelector(`.set-main > [data-sec="${sec}"]`));
+const visibleIn = (x) => x.offsetParent !== null || x.getClientRects().length > 0;
+function subnavTargets(sec) {
+  const body = sectionBody(sec);
+  if (!body) return [];
+  const root = sec === 'caldav' ? body.querySelector('section[data-sec="caldav"]') : body;
+  const out = [];
+  for (const x of root.querySelectorAll('h4, .account')) {
+    if (!visibleIn(x)) continue;
+    if (x.matches('.account')) {
+      const name = x.querySelector('[data-f="name"]')?.value.trim() || 'New account';
+      out.push({ el: x, label: name, level: 1 });
+    } else if (!x.closest('.account')) out.push({ el: x, label: x.textContent.trim(), level: +(x.dataset.navLevel || 1) });
+  }
+  return out;
+}
+function renderSubnav() {
+  setDlg.querySelectorAll('.set-nav .set-sub').forEach((x) => x.remove());
+  const sec = S.settingsSection;
+  setDlg.querySelectorAll('.set-nav [data-sec]').forEach((b) => {
+    const has = !!sectionBody(b.dataset.sec)?.querySelector('h4, .account');
+    b.classList.toggle('has-sub', has);
+    if (has) b.setAttribute('aria-expanded', String(b.dataset.sec === sec)); else b.removeAttribute('aria-expanded');
+  });
+  const btn = setDlg.querySelector(`.set-nav [data-sec="${sec}"]`);
+  const targets = subnavTargets(sec);
+  if (!btn || !targets.length) return;
+  const box = document.createElement('div');
+  box.className = 'set-sub';
+  box.setAttribute('role', 'group');
+  box.setAttribute('aria-label', `${SECTIONS[sec]} sections`);
+  for (const t of targets) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = t.label;
+    b.className = `lvl-${t.level}`;
+    b.onclick = () => {
+      t.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      t.el.classList.remove('flash'); void t.el.offsetWidth; t.el.classList.add('flash');
+    };
+    b._target = t.el;
+    box.append(b);
+  }
+  btn.after(box);
+  markSubnav();
+}
+function markSubnav() {
+  const box = setDlg.querySelector('.set-nav .set-sub');
+  const body = sectionBody(S.settingsSection);
+  if (!box || !body) return;
+  const top = body.getBoundingClientRect().top + 40;
+  let cur = null;
+  for (const b of box.children) if (b._target.getBoundingClientRect().top <= top) cur = b;
+  // Scrolled to the very end: the last heading is the one being read, even if it can't reach the top.
+  if (body.scrollTop + body.clientHeight >= body.scrollHeight - 4) cur = box.lastElementChild;
+  for (const b of box.children) b.classList.toggle('here', b === cur);
+}
+setDlg.querySelectorAll('.set-body').forEach((x) => x.addEventListener('scroll', markSubnav, { passive: true }));
+accountsEl.addEventListener('input', (e) => { if (e.target.dataset.f === 'name') renderSubnav(); });
+new MutationObserver(() => { if (setDlg.open) renderSubnav(); }).observe(accountsEl, { childList: true });
 $('#opt-vim').onchange = (e) => setVim(e.target.checked);
 $('#opt-lines').onchange = (e) => setLineNumbers(e.target.checked);
 $('#opt-zen').onchange = (e) => setZen(e.target.checked);
+
+// ---- Settings → Attachments: the files pasted into notes, which notes use them, and tidying up
+let attachList = [];
+async function loadAttachments() {
+  const ul = $('#att-list');
+  try { attachList = await api('GET', '/api/attachments'); } catch (e) { ul.innerHTML = `<li class="note err">${esc(e.message)}</li>`; return; }
+  renderAttachments();
+}
+function renderAttachments() {
+  const ul = $('#att-list');
+  const q = $('#att-filter').value.trim().toLowerCase();
+  const unusedOnly = $('#att-unused').checked;
+  const list = attachList.filter((a) => (!q || a.name.toLowerCase().includes(q)) && (!unusedOnly || !a.usedIn.length));
+  const unused = attachList.filter((a) => !a.usedIn.length);
+  $('#att-summary').textContent = attachList.length
+    ? `${attachList.length} file${attachList.length > 1 ? 's' : ''}, ${fmtSize(attachList.reduce((n, a) => n + a.size, 0))}` + (unused.length ? ` · ${unused.length} not used in any note` : '')
+    : '';
+  $('#btn-att-clean').disabled = !unused.length;
+  ul.innerHTML = list.length ? list.map((a) => `<li data-name="${esc(a.name)}">` +
+    `<a class="att-thumb" href="${esc(a.url)}" target="_blank" rel="noopener">${a.image ? `<img src="${esc(a.url)}" alt="" loading="lazy">` : `<span>${esc((a.name.split('.').pop() || '?').slice(0, 4).toUpperCase())}</span>`}</a>` +
+    `<span class="att-info"><b>${esc(a.name)}</b><span class="note">${fmtSize(a.size)} · ${relTime(a.modified)} · ` +
+    (a.usedIn.length ? `in ${a.usedIn.map((p) => `<a href="#" data-open="${esc(p)}">${esc(basename(p))}</a>`).join(', ')}` : '<span class="att-unused">not used</span>') + '</span></span>' +
+    `<button type="button" class="icon-btn" data-act="menu" aria-label="Actions for ${esc(a.name)}"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg></button></li>`).join('')
+    : `<li class="note">${attachList.length ? 'Nothing matches.' : 'No attachments yet. Paste or drop a file (a screenshot, a PDF) into a note, or use ⋯ → Attach file.'}</li>`;
+}
+$('#att-filter').addEventListener('input', renderAttachments);
+$('#att-unused').addEventListener('change', renderAttachments);
+$('#att-list').addEventListener('click', (e) => {
+  const o = e.target.closest('[data-open]');
+  if (o) { e.preventDefault(); setDlg.close(); open(o.dataset.open); return; }
+  const b = e.target.closest('[data-act="menu"]');
+  if (!b) return;
+  const a = attachList.find((x) => x.name === b.closest('li').dataset.name);
+  showMenu(b, [
+    { label: 'Copy link', run: () => copyText(`![${a.name.replace(/\.[^.]*$/, '')}](${a.url})`, 'Link copied: paste it into a note') },
+    { label: 'Download', run: () => { const x = document.createElement('a'); x.href = a.url + '?download'; x.download = a.name; x.click(); } },
+    { label: 'Open', run: () => window.open(a.url, '_blank', 'noopener') },
+    { label: 'Rename…', run: async () => {
+      const to = await ask('New name', a.name);
+      if (!to || to === a.name) return;
+      try {
+        const r = await api('PUT', '/api/attachments', { from: a.name, to });
+        toast(r.notes ? `Renamed; links in ${r.notes} note${r.notes > 1 ? 's' : ''} updated` : 'Renamed');
+        loadAttachments(); // notes that link to it are rewritten on the server, and an open one reloads
+      } catch (err) { toast(err.message); }
+    } },
+    { label: 'Delete…', danger: true, run: async () => {
+      if (!confirm(`Delete ${a.name} for good?${a.usedIn.length ? `\n\nIt's still used in ${a.usedIn.length} note${a.usedIn.length > 1 ? 's' : ''} (${a.usedIn.map(basename).join(', ')}), which will show a broken link.` : ''}`)) return;
+      try { await api('DELETE', `/api/attachments?name=${enc(a.name)}`); loadAttachments(); } catch (err) { toast(err.message); }
+    } },
+  ]);
+});
+$('#btn-att-clean').onclick = async () => {
+  const unused = attachList.filter((a) => !a.usedIn.length);
+  if (!unused.length || !confirm(`Delete the ${unused.length} attachment${unused.length > 1 ? 's' : ''} no note uses (${fmtSize(unused.reduce((n, a) => n + a.size, 0))})? This can't be undone.`)) return;
+  for (const a of unused) { try { await api('DELETE', `/api/attachments?name=${enc(a.name)}`); } catch (e) { toast(e.message); } }
+  loadAttachments();
+};
+
+// ---- Settings → API: personal tokens, and a form to try each endpoint (with this session)
+const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '');
+async function loadApi() {
+  $('#api-base').textContent = location.origin + '/api/v1';
+  const ul = $('#api-tokens');
+  try {
+    const list = await api('GET', '/api/tokens');
+    ul.innerHTML = list.length ? list.map((t) => `<li data-id="${esc(t.id)}"><span class="who"><b>${esc(t.name)}</b> <span class="badge">${t.scope === 'read' ? 'read only' : 'read + change'}</span>` +
+      ` <code class="note">${esc(t.hint)}</code><span class="note api-meta">made ${fmtDate(t.created)}` +
+      `${t.lastUsed ? ` · used ${relTime(t.lastUsed)}` : ' · never used'}${t.expires ? ` · ${Date.parse(t.expires) < Date.now() ? 'expired' : 'expires ' + fmtDate(t.expires)}` : ''}</span></span>` +
+      `<button type="button" class="btn danger" data-act="del">Delete</button></li>`).join('')
+      : '<li class="note">No tokens yet.</li>';
+  } catch (e) { ul.innerHTML = `<li class="note err">${esc(e.message)}</li>`; }
+  if (!apiTry.eps) {
+    try { apiTry.eps = (await api('GET', '/api/v1')).endpoints; } catch (e) { $('#api-ep-summary').textContent = e.message; return; }
+    $('#api-ep').innerHTML = apiTry.eps.map((e, i) => `<option value="${i}">${esc(e.method)} ${esc(e.path)}</option>`).join('');
+    apiPick();
+  }
+}
+$('#api-tokens').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-act="del"]');
+  if (!b) return;
+  const li = b.closest('li');
+  if (!confirm(`Delete the token “${li.querySelector('b').textContent}”? Anything using it stops working.`)) return;
+  try { await api('DELETE', `/api/tokens?id=${enc(li.dataset.id)}`); loadApi(); } catch (err) { toast(err.message); }
+});
+$('#btn-api-token').onclick = async () => {
+  const name = $('#api-token-name').value.trim();
+  if (!name) { $('#api-token-name').focus(); return toast('Give the token a name'); }
+  try {
+    const t = await api('POST', '/api/tokens', { name, scope: $('#api-token-scope').value, days: $('#api-token-days').value || null });
+    $('#api-token-value').textContent = t.token;
+    $('#api-token-new').hidden = false;
+    $('#api-token-name').value = '';
+    loadApi();
+  } catch (e) { toast(e.message); }
+};
+$('#btn-api-copy').onclick = async () => {
+  try { await navigator.clipboard.writeText($('#api-token-value').textContent); toast('Token copied'); }
+  catch { getSelection().selectAllChildren($('#api-token-value')); toast('Press Ctrl+C to copy it'); }
+};
+const apiTry = { eps: null };
+const apiEp = () => apiTry.eps?.[+$('#api-ep').value];
+const API_EXAMPLES = { path: S.path || 'Inbox.md', text: 'Something to do #task', heading: 'Today', state: 'done', q: 'meeting', content: '# New note\n' };
+function apiPick() {
+  const ep = apiEp();
+  if (!ep) return;
+  $('#api-ep-summary').textContent = ep.summary;
+  const params = Object.entries(ep.params || {});
+  $('#api-params').innerHTML = params.map(([k, d]) => `<label>${esc(k)} <input data-p="${esc(k)}" placeholder="${esc(d)}" title="${esc(d)}" autocomplete="off" spellcheck="false"></label>`).join('');
+  const p = $('#api-params').querySelector('[data-p="path"]');
+  if (p) p.value = S.path || '';
+  const body = ep.body ? Object.fromEntries(Object.entries(ep.body).filter(([, d]) => !/^Optional|^Or\b|^With line/.test(d)).map(([k]) => [k, API_EXAMPLES[k] ?? ''])) : null;
+  $('#api-body-wrap').hidden = !ep.body;
+  $('#api-body').value = body ? JSON.stringify(body, null, 2) : '';
+  $('#api-body').title = ep.body ? Object.entries(ep.body).map(([k, d]) => `${k}: ${d}`).join('\n') : '';
+  $('#api-result').hidden = true;
+  $('#api-status').textContent = ep.scope === 'write' ? 'Changes your notes' : '';
+  apiCurl();
+}
+function apiUrl() {
+  const ep = apiEp();
+  const q = new URLSearchParams();
+  for (const x of $('#api-params').querySelectorAll('[data-p]')) if (x.value.trim()) q.set(x.dataset.p, x.value.trim());
+  return ep.path + (q.size ? '?' + q : '');
+}
+function apiCurl() {
+  const ep = apiEp();
+  if (!ep) return;
+  const quote = (s) => `'${s.replace(/'/g, "'\\''")}'`;
+  let body = '';
+  if (ep.body) { try { body = JSON.stringify(JSON.parse($('#api-body').value || '{}')); } catch { body = $('#api-body').value; } }
+  $('#api-curl').value = `curl${ep.method === 'GET' ? '' : ' -X ' + ep.method} -H "Authorization: Bearer $TICKMARK_TOKEN"` +
+    (ep.body ? ` -H 'Content-Type: application/json' -d ${quote(body)}` : '') + ` ${quote(location.origin + apiUrl())}`;
+}
+$('#api-ep').onchange = apiPick;
+$('#api-params').addEventListener('input', apiCurl);
+$('#api-body').addEventListener('input', apiCurl);
+$('#btn-api-send').onclick = async () => {
+  const ep = apiEp();
+  if (!ep) return;
+  let body;
+  if (ep.body) { try { body = JSON.parse($('#api-body').value || '{}'); } catch { return toast("The body isn't valid JSON"); } }
+  const st = $('#api-status'), out = $('#api-result');
+  st.textContent = 'Sending…';
+  const t0 = performance.now();
+  try {
+    const r = await fetch(apiUrl(), { method: ep.method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const txt = await r.text();
+    let shown = txt;
+    try { shown = JSON.stringify(JSON.parse(txt), null, 2); } catch {}
+    st.textContent = `${r.status} ${r.statusText || (r.ok ? 'OK' : '')} · ${Math.round(performance.now() - t0)} ms`;
+    st.className = 'note ' + (r.ok ? 'ok' : 'err');
+    out.textContent = shown.length > 200000 ? shown.slice(0, 200000) + '\n…' : shown;
+    out.hidden = false;
+  } catch (e) { st.textContent = e.message; st.className = 'note err'; }
+};
 
 // ---- Settings → About
 async function loadAbout() {
@@ -1979,6 +2463,7 @@ const AT_LABEL = { todo: 'To do', doing: 'In progress', done: 'Done', cancelled:
 const at = { tasks: [], filter: 'todo', q: '' };
 async function loadAboutTasks() {
   at.filter = store.get('aboutTaskFilter', 'todo');
+  $('#at-sort').value = store.get('aboutTaskSort', 'note');
   try { at.tasks = await api('GET', '/api/tasks/all'); } catch (e) { $('#at-list').innerHTML = `<p class="note err">${esc(e.message)}</p>`; return; }
   renderAboutTasks();
 }
@@ -1993,18 +2478,31 @@ function renderAboutTasks() {
     return;
   }
   const today = localDate(new Date());
+  const sort = $('#at-sort').value;
+  const row = (t, withNote) => {
+    const overdue = t.due && t.due.slice(0, 10) < today && (t.state === 'todo' || t.state === 'doing');
+    return `<li><button type="button" class="at-task ${t.state}" data-open="${esc(t.path)}" data-line="${t.line}" title="${esc(AT_LABEL[t.state])}">` +
+      `<span class="at-st" aria-label="${esc(AT_LABEL[t.state])}">${AT_ICON[t.state]}</span><span class="t">${esc(t.title || '(empty)')}</span>` +
+      (t.priority && t.priority <= 4 ? '<span class="meta" title="High priority">⏫</span>' : t.priority >= 6 ? '<span class="meta" title="Low priority">🔽</span>' : '') +
+      (withNote ? `<span class="meta at-in">${esc(basename(t.path))}</span>` : '') +
+      (t.due ? `<span class="meta${overdue ? ' overdue' : ''}">${esc(t.due)}</span>` : '') +
+      (t.synced ? '<span class="meta" title="Syncs with CalDAV">⇅</span>' : '') + '</button></li>';
+  };
+  if (sort !== 'note') {
+    // One list across notes: by due date (undated last) or priority (highest first), then due date.
+    const pr = (t) => (t.priority ? t.priority : 5.5);
+    const due = (t) => t.due || '\uffff';
+    const sorted = [...shown].sort((a, b) => (sort === 'priority' ? pr(a) - pr(b) : 0) || (due(a) < due(b) ? -1 : due(a) > due(b) ? 1 : 0) || a.path.localeCompare(b.path) || a.line - b.line);
+    $('#at-list').innerHTML = `<div class="at-note"><ul>${sorted.map((t) => row(t, true)).join('')}</ul></div>`;
+    return;
+  }
   const groups = new Map();
   for (const t of shown) { if (!groups.has(t.path)) groups.set(t.path, []); groups.get(t.path).push(t); }
   $('#at-list').innerHTML = [...groups].map(([path, list]) => `<div class="at-note"><h5><button type="button" data-open="${esc(path)}">${esc(path.replace(/\.md$/i, ''))}</button></h5><ul>` +
-    list.map((t) => {
-      const overdue = t.due && t.due.slice(0, 10) < today && (t.state === 'todo' || t.state === 'doing');
-      return `<li><button type="button" class="at-task ${t.state}" data-open="${esc(t.path)}" data-line="${t.line}" title="${esc(AT_LABEL[t.state])}">` +
-        `<span class="at-st" aria-label="${esc(AT_LABEL[t.state])}">${AT_ICON[t.state]}</span><span class="t">${esc(t.title || '(empty)')}</span>` +
-        (t.due ? `<span class="meta${overdue ? ' overdue' : ''}">${esc(t.due)}</span>` : '') +
-        (t.synced ? '<span class="meta" title="Syncs with CalDAV">⇅</span>' : '') + '</button></li>';
-    }).join('') + '</ul></div>').join('') +
+    list.map((t) => row(t, false)).join('') + '</ul></div>').join('') +
     (at.tasks.length >= 5000 ? '<p class="note">Showing the first 5,000 tasks.</p>' : '');
 }
+$('#at-sort').addEventListener('change', (e) => { store.set('aboutTaskSort', e.target.value); renderAboutTasks(); });
 $('#at-chips').addEventListener('click', (e) => {
   const b = e.target.closest('[data-f]');
   if (!b) return;
@@ -2836,9 +3334,26 @@ async function loadAllShares(blocked) {
 
 // ---- branding: server-wide name, logo and favicon
 /** Show the server's branding everywhere it appears (the server also fills it into the page it sends). */
+/**
+ * The sign-in screen's look (Settings → Appearance → Sign-in screen) on `box`: the real #login, or
+ * the small preview in Settings. `look` = { theme, accent, bg, dim, message, image }.
+ */
+function applyLoginLook(look = {}, box = $('#login')) {
+  if (look.theme) box.dataset.theme = look.theme; else delete box.dataset.theme;
+  box.style.setProperty('--login-accent', look.accent || '');
+  if (look.accent) box.style.setProperty('--accent', look.accent); else box.style.removeProperty('--accent');
+  const img = look.image ? `url("${String(look.image).replace(/["\\\n]/g, '')}")` : '';
+  const shade = img && look.dim ? 'linear-gradient(rgba(0,0,0,.45), rgba(0,0,0,.45)), ' : '';
+  box.style.background = img ? `${shade}${img} center / cover no-repeat, ${look.bg || 'var(--bg)'}` : look.bg || '';
+  box.classList.toggle('has-picture', !!img);
+  const msg = box.querySelector('.login-message, .ll-msg');
+  if (msg) { msg.textContent = look.message || ''; msg.hidden = !look.message; }
+}
+
 function applyBranding(b) {
   if (!b) return;
   S.brand = b;
+  if (!loginPreview) applyLoginLook(b.login);
   document.querySelectorAll('.brand-name').forEach((x) => (x.textContent = b.name));
   document.querySelectorAll('.brand img').forEach((x) => (x.src = b.logo));
   const fav = document.querySelector('link[rel="icon"]');
@@ -2858,6 +3373,7 @@ function renderBranding() {
   renderBrandImages();
   $('#btn-brand-reset').disabled = !editable || !(b.customName || b.hasLogo || b.hasFavicon);
   $('#brand-state').textContent = '';
+  renderLoginLook();
 }
 function renderBrandImages() {
   const b = S.brand || {};
@@ -2900,6 +3416,102 @@ $('#btn-brand-save').onclick = async () => {
     renderBranding();
     $('#brand-state').textContent = 'Saved';
   } catch (e) { toast(e.message); }
+};
+
+// ---- Settings → Appearance → Sign-in screen (admins): changes show in the small preview as you
+// make them; Save puts them on the real sign-in screen, Full-screen preview shows that before saving.
+const llDraft = { look: null, image: undefined }; // image: data: URL, null (remove), undefined (unchanged)
+let loginPreview = false;
+function llLook() {
+  const accentOn = $('#ll-accent-on').checked, bgOn = $('#ll-bg-on').checked;
+  const saved = S.brand?.login || {};
+  return {
+    theme: $('#ll-theme').value || undefined,
+    accent: accentOn ? $('#ll-accent').value : undefined,
+    bg: bgOn ? $('#ll-bg').value : undefined,
+    dim: $('#ll-dim').checked,
+    message: $('#ll-message').value.trim(),
+    image: llDraft.image !== undefined ? llDraft.image : saved.image || null,
+  };
+}
+function renderLoginLook() {
+  const wrap = $('#login-look-wrap');
+  wrap.hidden = !canBrand() || S.me?.demo;
+  if (wrap.hidden) return;
+  $('#login-look-off').hidden = isMulti();
+  const sel = $('#ll-theme');
+  if (sel.options.length < 2) sel.insertAdjacentHTML('beforeend', THEMES.filter(([id]) => id !== 'system').map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join(''));
+  const l = S.brand?.login || {};
+  llDraft.image = undefined;
+  sel.value = l.theme || '';
+  $('#ll-accent-on').checked = !!l.accent; $('#ll-accent').value = l.accent || '#2f7d6d';
+  $('#ll-bg-on').checked = !!l.bg; $('#ll-bg').value = l.bg || '#f7f6f3';
+  $('#ll-dim').checked = !!l.dim;
+  $('#ll-message').value = l.message || '';
+  $('#ll-state').textContent = '';
+  llPreview();
+}
+function llPreview() {
+  const look = llLook();
+  $('#ll-accent').disabled = !$('#ll-accent-on').checked;
+  $('#ll-bg').disabled = !$('#ll-bg-on').checked;
+  $('#ll-image-clear').disabled = !look.image;
+  $('#ll-dim').disabled = !look.image;
+  const box = $('#ll-preview');
+  applyLoginLook(look, box);
+  box.querySelector('#ll-logo').src = S.brand?.logo || '/icons/icon.svg';
+  box.querySelector('.ll-name').textContent = S.brand?.name || 'Tickmark';
+  if (loginPreview) applyLoginLook(look);
+}
+for (const id of ['ll-theme', 'll-accent-on', 'll-accent', 'll-bg-on', 'll-bg', 'll-dim', 'll-message']) $('#' + id).addEventListener('input', llPreview);
+$('#ll-image-pick').onclick = () => $('#ll-image-file').click();
+$('#ll-image-file').onchange = (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  if (f.size > 3 * 1024 * 1024) return toast('The background picture must be 3 MB or smaller');
+  const r = new FileReader();
+  r.onload = () => { llDraft.image = r.result; if (!$('#ll-dim').checked && !S.brand?.login?.image) $('#ll-dim').checked = true; llPreview(); };
+  r.readAsDataURL(f);
+};
+$('#ll-image-clear').onclick = () => { llDraft.image = null; llPreview(); };
+$('#btn-ll-save').onclick = async () => {
+  const { image, ...look } = llLook();
+  try {
+    const b = await api('PUT', '/api/branding', { login: look, ...(llDraft.image !== undefined ? { loginbg: llDraft.image } : {}) });
+    applyBranding(b);
+    renderLoginLook();
+    $('#ll-state').textContent = 'Saved';
+  } catch (e) { toast(e.message); }
+};
+$('#btn-ll-reset').onclick = async () => {
+  if (!confirm('Put the sign-in screen back to its default look for everyone?')) return;
+  try {
+    applyBranding(await api('PUT', '/api/branding', { login: null, loginbg: null }));
+    renderLoginLook();
+    $('#ll-state').textContent = 'Back to the default';
+  } catch (e) { toast(e.message); }
+};
+$('#btn-ll-full').onclick = () => {
+  loginPreview = true;
+  const me = S.me || {};
+  $('#login-local').hidden = me.localLogin === false;
+  $('#login-sso').hidden = !me.sso;
+  $('#login-or').hidden = me.localLogin === false || !me.sso;
+  $('#login-msg').textContent = '';
+  $('#login-preview-close').hidden = false;
+  applyLoginLook(llLook());
+  setDlg.close();
+  $('#login').hidden = false;
+  $('#login-preview-close').focus();
+};
+$('#login-preview-close').onclick = () => {
+  loginPreview = false;
+  $('#login').hidden = true;
+  $('#login-preview-close').hidden = true;
+  applyLoginLook(S.brand?.login);
+  openSettings('appearance');
+  setTimeout(() => $('#login-look').scrollIntoView({ block: 'start' }), 50);
 };
 
 // ---- custom CSS: live while typing, saved per user (follows them to every device)
@@ -3211,7 +3823,10 @@ async function loadUsers() {
   ul.innerHTML = '';
   for (const u of list) {
     const li = document.createElement('li');
-    li.innerHTML = `<span class="who">${esc(u.name)}${u.admin ? '<span class="badge">admin</span>' : ''}${u.sso ? '<span class="badge">SSO</span>' : ''}` +
+    li.innerHTML = `<span class="who">${esc(u.name)}${u.admin ? '<span class="badge">admin</span>' : ''}` +
+      `${u.sso ? `<span class="badge" title="${esc(u.ssoLabel ? 'Signs in with SSO as ' + u.ssoLabel : 'Signs in with SSO')}">SSO</span>` : ''}` +
+      `${u.ssoPending ? `<span class="badge pending" title="Will be paired with the SSO account ${esc(u.ssoPending)} when it first signs in">SSO: ${esc(u.ssoPending)}?</span>` : ''}` +
+      `${u.sso && u.ssoLabel ? ` <span class="note">${esc(u.ssoLabel)}</span>` : ''}` +
       `${!u.hasPassword && !u.sso ? ' <span class="note">(no password)</span>' : ''}</span>` +
       `<button type="button" class="icon-btn" aria-label="Actions for ${esc(u.name)}"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg></button>`;
     const self = u.name === S.me.user.name;
@@ -3221,6 +3836,8 @@ async function loadUsers() {
         const pw = await ask(`New password for ${u.name} (at least 8 characters)`);
         if (pw) userAction('PUT', { name: u.name, password: pw }, `${u.name}'s password was changed and their sessions signed out.`);
       } }] : []),
+      ...(!u.sso && oidcOn() ? [{ label: u.ssoPending ? 'Change SSO pairing…' : 'Pair with SSO account…', run: () => pairSso(u, list) }] : []),
+      ...(u.ssoPending ? [{ label: 'Cancel SSO pairing', run: () => userAction('PUT', { name: u.name, ssoPending: '' }) }] : []),
       ...(u.sso && !self ? [{ label: 'Unlink SSO identity', run: () => userAction('PUT', { name: u.name, unlinkSso: true }) }] : []),
       ...(self ? [] : [{ label: 'Remove user…', danger: true, run: () => {
         if (confirm(`Remove ${u.name}? They can no longer sign in. Their notes and settings stay on the server's disk.`)) userAction('DELETE', { name: u.name });
@@ -3229,6 +3846,26 @@ async function loadUsers() {
     ul.append(li);
   }
 }
+/**
+ * Pair a user who signs in with a password (or not at all yet) with an SSO account: one another user
+ * already signs in with (an account SSO created by itself, say), or one that hasn't signed in yet.
+ */
+async function pairSso(u, list) {
+  const others = list.filter((x) => x.sso && x.name !== u.name);
+  const items = [
+    ...others.map((x) => ({ label: `${x.name}'s SSO account`, detail: x.ssoLabel || '', run: async () => {
+      if (!confirm(`Pair ${u.name} with the SSO account ${x.name} signs in with${x.ssoLabel ? ` (${x.ssoLabel})` : ''}?\n\n` +
+        `From then on that SSO sign-in opens ${u.name}'s notes. ${x.name} is signed out and ${x.hasPassword ? 'can still sign in with a password' : "can't sign in any more (remove it if you don't need its notes)"}.`)) return;
+      userAction('PUT', { name: u.name, pairWith: x.name }, `${u.name} now signs in with that SSO account.`);
+    } })),
+    { label: 'An SSO account that hasn’t signed in yet…', detail: 'by username or email', run: async () => {
+      const v = await ask(`SSO username or email to pair with ${u.name} (on its first sign-in)`, u.ssoPending || '');
+      if (v != null && v.trim()) userAction('PUT', { name: u.name, ssoPending: v.trim() }, `The next SSO sign-in as ${v.trim()} opens ${u.name}'s notes.`);
+    } },
+  ];
+  openPicker((q) => items.filter((it) => !q || (it.label + ' ' + it.detail).toLowerCase().includes(q.toLowerCase())), `Pair ${u.name} with…`);
+}
+const oidcOn = () => !!S.me?.sso;
 async function userAction(method, body, done) {
   try {
     if (method === 'DELETE') await api('DELETE', `/api/users?name=${enc(body.name)}`);
@@ -3384,12 +4021,14 @@ function showLogin(message = '', kind = 'err') {
   $('#login-or').hidden = me.localLogin === false || !me.sso;
   $('#login-msg').textContent = message;
   $('#login-msg').className = `note ${kind}`;
+  applyLoginLook(S.brand?.login);
   $('#login').hidden = false;
   if (me.localLogin !== false) setTimeout(() => $('#login-form').username.focus(), 50);
   return loginWaiter || (loginWaiter = new Promise((res) => { showLogin.done = res; }));
 }
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (loginPreview) return $('#login-msg').textContent = 'This is a preview: sign-in is off here.';
   const f = e.currentTarget;
   $('#login-msg').textContent = '';
   try {
@@ -3500,6 +4139,39 @@ function applyPrefs(p) {
 }
 addEventListener('tickmark-theme', (e) => savePref('theme', e.detail));
 
+// ---------------------------------------------------------------- launching from the installed app
+// The manifest's shortcuts open /?action=new|search|palette (long-press the app icon), and sharing
+// text or a link to Tickmark from another app opens /?share_title=…&share_text=…&share_url=….
+async function launchAction() {
+  const q = new URLSearchParams(location.search);
+  const action = q.get('action');
+  const shared = ['share_title', 'share_text', 'share_url'].some((k) => q.has(k));
+  if (!action && !shared) return false;
+  history.replaceState(null, '', location.pathname + location.hash);
+  if (action === 'new') { setVaultOpen(true); await newNote(''); return true; }
+  if (action === 'search') {
+    if (mobile.matches) el.app.classList.add('sidebar-open');
+    setTimeout(() => el.search.focus(), 50);
+    return false; // still open the last note behind it
+  }
+  if (action === 'palette') { setTimeout(openPalette, 50); return false; }
+  if (!shared) return false;
+  const title = (q.get('share_title') || '').trim(), text = (q.get('share_text') || '').trim(), link = (q.get('share_url') || '').trim();
+  // Some apps put the link in the text; don't write it twice.
+  const body = [text, link && !text.includes(link) ? link : ''].filter(Boolean).join('\n\n');
+  const firstLine = (title || text.split('\n')[0] || link || '').replace(/https?:\/\/\S+/g, '').replace(/[\\/:*?"<>|#^[\]]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const base = (firstLine.slice(0, 60).trim() || `Shared ${new Date().toISOString().slice(0, 10)}`);
+  let path = base + '.md';
+  for (let i = 1; S.files.some((f) => f.path.toLowerCase() === path.toLowerCase()); i++) path = `${base} ${i}.md`;
+  try {
+    await api('POST', '/api/file', { path, content: (title ? `# ${title}\n\n` : '') + body + '\n' });
+    await loadTree();
+    await open(path);
+    toast(`Saved what you shared to ${path.replace(/\.md$/, '')}`);
+  } catch (e) { toast(e.message); }
+  return true;
+}
+
 // ---------------------------------------------------------------- boot
 async function boot() {
   api('GET', '/api/branding').then(applyBranding).catch(() => {});
@@ -3540,7 +4212,9 @@ async function boot() {
   setupSyncTimer();
   renderSync();
   applyView();
-  if (location.hash.length > 1) routeFromHash();
+  const launched = await launchAction(); // a shortcut or share from the installed app
+  if (launched) { /* it opened a note */ }
+  else if (location.hash.length > 1) routeFromHash();
   else {
     const last = store.get('last');
     if (last && S.files.some((f) => f.path === last)) open(last, { push: false });

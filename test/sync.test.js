@@ -315,19 +315,20 @@ test('recurring tasks', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, async (
     write('Home.md', read('Home.md').replace('- [ ] Water plants', '- [x] Water plants'));
     await engine.run();
     const text = read('Home.md');
-    assert.match(text, /^- \[ \] Water plants #task 🔁 every week 📅 2026-12-01 \^t\w+\n- \[x\] Water plants #task 📅 2026-11-24 ✅ \d{4}-\d\d-\d\d\n/);
+    assert.match(text, /^- \[ \] Water plants #task 🔁 every week 📅 2026-12-01 \^t\w+\n- \[ \] Pay rent/);
+    assert.equal(text.match(/Water plants/g).length, 1, 'no completed copy');
     const w = await byTitle('Water plants');
     assert.deepEqual([w.model.done, w.model.due, w.model.recur], [false, '2026-12-01', 'FREQ=WEEKLY']);
     assert.match(w.ics, /DTSTART;VALUE=DATE:20261201/);
-    assert.equal((await remote()).length, 2, 'the history line is not uploaded');
+    assert.equal((await remote()).length, 2);
   });
 
-  await t.test('completing it in another app moves it on and records history', async () => {
+  await t.test('completing it in another app moves it on', async () => {
     const r = await byTitle('Pay rent');
     await client.put(r.url, buildTodo({ existing: r.ics, uid: r.uid, model: { ...r.model, done: true }, doneDate: '2026-12-02' }), { etag: r.etag });
     const res = await engine.run();
     assert.equal(res.pulled, 1);
-    assert.match(read('Home.md'), /- \[ \] Pay rent #task 🔁 every month on the 1st 📅 2027-01-01 \^t\w+\n- \[x\] Pay rent #task 📅 2026-12-01 ✅ 2026-12-02/);
+    assert.match(read('Home.md'), /- \[ \] Pay rent #task 🔁 every month on the 1st 📅 2027-01-01 \^t\w+\n$/);
     const after = await byTitle('Pay rent');
     assert.deepEqual([after.model.done, after.model.due], [false, '2027-01-01']);
   });
@@ -355,7 +356,7 @@ test('recurring tasks', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, async (
     await engine.run();
     await engine.run();
     const text = read('Home.md');
-    assert.equal(text.match(/Water plants/g).length, 3, 'no new copies'); // the open item + 2 history lines
+    assert.equal(text.match(/Water plants/g).length, 1, 'no new copies');
     assert.match(text, /^- \[-\] Water plants #task 📅 2026-12-08 \^t\w+$/m);
     const w = await byTitle('Water plants');
     assert.deepEqual([w.model.status, w.model.recur], ['cancelled', null]);
@@ -368,7 +369,7 @@ test('recurring tasks', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, async (
     await engine.run();
     await engine.run();
     const text = read('Home.md');
-    assert.equal(text.match(/Pay rent/g).length, 2, 'no new copies');
+    assert.equal(text.match(/Pay rent/g).length, 1, 'no new copies');
     assert.match(text, /^- \[-\] Pay rent #task 📅 2027-01-01 \^t\w+$/m);
     assert.doesNotMatch((await byTitle('Pay rent')).ics, /RRULE/);
   });
@@ -527,4 +528,42 @@ test('a new task list can be created from Settings', { skip: !URL_ && 'set CALDA
   const direct = new CalDAV({ url: c.url, username: USER, password: PASS });
   const d = await direct.createCalendar('Sibling');
   assert.equal(new URL('..', d.url).href, new URL('..', c.url).href);
+});
+
+test('reachability check, and notes that keep their tasks sorted', { skip: !URL_ && 'set CALDAV_TEST_URL to run' }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tickmark-reach-'));
+  const calUrl = new URL(`/${USER}/tickmark-reach-${Date.now()}/`, URL_).href;
+  const client = new CalDAV({ url: URL_, username: USER, password: PASS });
+  await client.request('MKCALENDAR', calUrl, {
+    body: '<?xml version="1.0"?><c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:set><d:prop>' +
+      '<c:supported-calendar-component-set><c:comp name="VTODO"/></c:supported-calendar-component-set></d:prop></d:set></c:mkcalendar>',
+  });
+  const good = { id: 'a1', name: 'Test', url: URL_, username: USER, password: PASS, calendarUrl: calUrl, itemTags: ['task'], sectionTags: ['sync'], inboxFile: 'Inbox.md' };
+  const cfg = { accounts: [good] };
+  const index = new Index(path.join(dir, 'data', 'index.sqlite'));
+  const vault = new Vault(path.join(dir, 'vault'), { onWrite: (rel, c) => rel && c != null && index.indexFile(rel, c) });
+  const seen = [];
+  const engine = new SyncEngine({ vault, index, getConfig: () => cfg, log: () => {}, onStatus: (s) => seen.push(s.reach) });
+
+  await t.test('a server that answers is reachable; one that does not is down', async () => {
+    assert.equal((await engine.ping()).ok, true);
+    cfg.accounts = [good, { ...good, id: 'a2', name: 'Gone', url: 'http://127.0.0.1:9/', calendarUrl: 'http://127.0.0.1:9/x/' }];
+    const r = await engine.ping();
+    assert.deepEqual([r.ok, r.down.map((d) => d.name)], [false, ['Gone']]);
+    const n = seen.length;
+    await engine.ping();
+    assert.equal(seen.length, n, 'no broadcast while nothing changed');
+    cfg.accounts = [good];
+  });
+
+  await t.test('sync re-sorts a note with sort-tasks in its frontmatter', async () => {
+    fs.mkdirSync(path.join(dir, 'vault'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'vault', 'Week.md'), '---\nsort-tasks: due\n---\n## Week #sync\n- [ ] Later 📅 2026-12-09\n- [ ] Soon 📅 2026-12-02\n');
+    await engine.run();
+    const todo = (await client.listTodos(calUrl)).map((r) => ({ ...r, ...todoModel(findTodo(parseICS(r.ics))) })).find((r) => r.model.title === 'Later');
+    await client.put(todo.url, buildTodo({ existing: todo.ics, uid: todo.uid, model: { ...todo.model, due: '2026-11-30' } }), { etag: todo.etag });
+    await engine.run();
+    assert.match(fs.readFileSync(path.join(dir, 'vault', 'Week.md'), 'utf8'), /## Week #sync\n- \[ \] Later 📅 2026-11-30 \^t\w+\n- \[ \] Soon/);
+    assert.equal(engine.status.reach.ok, true, 'a sync that worked means reachable');
+  });
 });

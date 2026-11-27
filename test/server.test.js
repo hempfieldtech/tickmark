@@ -301,6 +301,34 @@ test('SSO sign-in via OpenID Connect', async (t) => {
       assert.equal((await alex.call('POST', '/api/users', { name: 'guest', password: 'guest password' })).status, 200);
       assert.equal((await client(srv.base).call('POST', '/api/auth/login', { username: 'guest', password: 'guest password' })).status, 200);
     });
+
+    await t.test('admins pair a user with an SSO account by hand', async () => {
+      // alex.h-2 is SSO's own account for u-2: move that sign-in over to guest.
+      const users = async () => Object.fromEntries((await alex.call('GET', '/api/users')).data.map((u) => [u.name, u]));
+      assert.equal((await alex.call('PUT', '/api/users', { name: 'guest', pairWith: 'alex.h-2' })).status, 200);
+      let list = await users();
+      assert.deepEqual([list.guest.sso, list['alex.h-2'].sso], [true, false]);
+      const x = client(srv.base);
+      as({ sub: 'u-2', username: 'alex.h', email: 'two@example.com', groups: ['notes'] });
+      await ssoSignIn(x, idp);
+      assert.equal((await x.call('GET', '/api/auth/me')).data.user.name, 'guest');
+      assert.equal((await users()).guest.ssoLabel, 'two@example.com', 'admins see who it is');
+      assert.equal((await alex.call('PUT', '/api/users', { name: 'guest', pairWith: 'alex.h' })).status, 400, 'unlink first');
+
+      // A pairing set up before that SSO account ever signs in.
+      await alex.call('POST', '/api/users', { name: 'sam', password: 'sam password' });
+      assert.equal((await alex.call('PUT', '/api/users', { name: 'sam', ssoPending: 'Sam@Example.com' })).status, 200);
+      assert.equal((await users()).sam.ssoPending, 'sam@example.com');
+      const y = client(srv.base);
+      as({ sub: 'u-9', username: 'samuel', email: 'sam@example.com', groups: ['notes'] });
+      await ssoSignIn(y, idp);
+      assert.equal((await y.call('GET', '/api/auth/me')).data.user.name, 'sam');
+      list = await users();
+      assert.deepEqual([list.sam.sso, list.sam.ssoPending, list.samuel], [true, null, undefined], 'no new user made');
+      const guest = client(srv.base);
+      await guest.call('POST', '/api/auth/login', { username: 'guest', password: 'guest password' });
+      assert.equal((await guest.call('PUT', '/api/users', { name: 'guest', ssoPending: 'x' })).status, 403, 'admins only');
+    });
   } finally {
     await srv.stop();
     idp.close();
@@ -506,7 +534,7 @@ test('branding: name, logo and favicon for everyone, set by admins', async () =>
   const svg = 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>').toString('base64');
   try {
     assert.deepEqual((await c.call('GET', '/api/branding')).data,
-      { name: 'Tickmark', customName: false, logo: '/icons/icon.svg', favicon: '/icons/icon.svg', hasLogo: false, hasFavicon: false });
+      { name: 'Tickmark', customName: false, logo: '/icons/icon.svg', favicon: '/icons/icon.svg', hasLogo: false, hasFavicon: false, login: { image: null } });
     const b = (await c.call('PUT', '/api/branding', { name: 'Acme <Notes>', logo: svg, favicon: png })).data;
     assert.equal(b.name, 'Acme <Notes>');
     assert.match(b.logo, /^\/branding\/logo\?v=/);
@@ -527,6 +555,25 @@ test('branding: name, logo and favicon for everyone, set by admins', async () =>
     assert.match((await c.call('GET', '/')).data, /<title>Tickmark<\/title>/);
     assert.deepEqual(fs.readdirSync(path.join(dir, 'data', 'branding')), []);
     await c.call('PUT', '/api/branding', { name: 'Acme' });
+
+    // The sign-in screen's look: only known themes and hex colours are kept; the picture is served like the logo.
+    const jpg = 'data:image/jpeg;base64,' + Buffer.from('\xff\xd8\xff fake').toString('base64');
+    const l = (await c.call('PUT', '/api/branding', { login: { theme: 'nord', accent: '#FF0066', bg: 'red; x', dim: 1, message: ' Hi\n\n\n\nthere ', junk: 1 }, loginbg: jpg })).data.login;
+    assert.deepEqual({ ...l, image: undefined }, { theme: 'nord', accent: '#ff0066', dim: true, message: 'Hi\n\nthere', image: undefined });
+    assert.match(l.image, /^\/branding\/loginbg\?v=/);
+    assert.equal((await fetch(srv.base + l.image)).headers.get('content-type'), 'image/jpeg');
+    assert.equal((await c.call('PUT', '/api/branding', { login: { theme: 'my-own' } })).data.login.theme, undefined, 'custom themes are per user');
+    assert.equal((await c.call('PUT', '/api/branding', { loginbg: svg })).status, 400, 'no SVG backgrounds');
+    await c.call('PUT', '/api/branding', { login: null, loginbg: null });
+    assert.deepEqual((await c.call('GET', '/api/branding')).data.login, { image: null });
+
+    // PWA: the manifest follows the page's theme colour, and the service worker caches every app file.
+    const tm = (await c.call('GET', '/manifest.webmanifest?bg=1e1e2e')).data;
+    assert.deepEqual([tm.theme_color, tm.background_color], ['#1e1e2e', '#1e1e2e']);
+    assert.equal((await c.call('GET', '/manifest.webmanifest?bg=red')).data.theme_color, '#2f7d6d', 'only hex');
+    assert.ok(tm.shortcuts.length >= 2 && tm.share_target.action === '/');
+    const sw = (await c.call('GET', '/sw.js')).data;
+    for (const f of ['/app.js', '/vim.js', '/shared/folds.js', '/vendor/marked.esm.js']) assert.ok(sw.includes(`"${f}"`), f + ' precached');
   } finally { await srv.stop(); }
 
   // With sign-in on, only admins can change it, but anyone (even signed out) sees it.
@@ -997,5 +1044,139 @@ test('demo mode: a private sandbox per visitor, CalDAV and server settings off',
     await c3.call('GET', '/api/auth/me');
     const again = await a.call('GET', '/api/file?path=Mine.md');
     assert.equal(again.status, 404, 'a got a fresh sandbox');
+  } finally { await srv.stop(); }
+});
+
+// ---------------------------------------------------------------- REST API
+test('REST API: tokens, notes and checklist items', async (t) => {
+  const dir = tmp();
+  const data = path.join(dir, 'data');
+  addUser(data, 'alex', 'alex password', '--admin');
+  addUser(data, 'sam', 'sam password');
+  const srv = await startServer({ TICKMARK_DATA: data, TICKMARK_VAULT: path.join(dir, 'vault') });
+  const alex = client(srv.base), sam = client(srv.base);
+  await alex.call('POST', '/api/auth/login', { username: 'alex', password: 'alex password' });
+  await sam.call('POST', '/api/auth/login', { username: 'sam', password: 'sam password' });
+  const api = (token) => async (method, url, body) => {
+    const r = await fetch(srv.base + url, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: r.status, data: await r.json().catch(() => null) };
+  };
+  try {
+    let a, ro;
+    await t.test('tokens are made in the app and shown once', async () => {
+      const r = await alex.call('POST', '/api/tokens', { name: 'Shortcuts', scope: 'write' });
+      assert.equal(r.status, 200);
+      assert.match(r.data.token, /^tm_[\w-]{30,}$/);
+      a = api(r.data.token);
+      ro = api((await alex.call('POST', '/api/tokens', { name: 'Dashboard', scope: 'read' })).data.token);
+      const list = (await alex.call('GET', '/api/tokens')).data;
+      assert.deepEqual(list.map((x) => x.name), ['Shortcuts', 'Dashboard']);
+      assert.ok(list.every((x) => !x.token && !x.hash), 'secrets never listed');
+      assert.equal((await sam.call('GET', '/api/tokens')).data.length, 0, "each user's own");
+    });
+
+    await t.test('without a valid token or session: 401', async () => {
+      assert.equal((await fetch(srv.base + '/api/v1/notes')).status, 401);
+      assert.equal((await api('tm_' + 'x'.repeat(32))('GET', '/api/v1/notes')).status, 401);
+      assert.equal((await alex.call('GET', '/api/v1')).status, 200, 'the app session works too');
+    });
+
+    await t.test('notes: write, append under a heading, read, list', async () => {
+      assert.equal((await a('PUT', '/api/v1/note?path=Work/Plan', { content: '# Plan\n\n## Today\n- [ ] Call Jo\n' })).data.created, true);
+      await a('POST', '/api/v1/note/append?path=Work/Plan.md', { text: 'Notes from the call', heading: 'Log' });
+      const r = await a('GET', '/api/v1/note?path=Work/Plan.md');
+      assert.equal(r.data.content, '# Plan\n\n## Today\n- [ ] Call Jo\n\n## Log\nNotes from the call\n');
+      assert.deepEqual((await a('GET', '/api/v1/notes?folder=Work')).data.map((n) => n.path), ['Work/Plan.md']);
+      assert.equal((await api((await sam.call('POST', '/api/tokens', { name: 's' })).data.token)('GET', '/api/v1/note?path=Work/Plan.md')).status, 404, "not in sam's vault");
+    });
+
+    await t.test('tasks: add, list, refuse to finish a parent early, complete, delete', async () => {
+      const add = await a('POST', '/api/v1/tasks?path=Work/Plan.md', { text: 'Send the report', heading: 'Today', due: '2026-12-01', priority: 'high' });
+      assert.equal(add.status, 200);
+      assert.deepEqual([add.data.text, add.data.state, add.data.heading, add.data.due, add.data.priority], ['Send the report ⏫ 📅 2026-12-01', 'todo', 'Today', '2026-12-01', 'high']);
+      await a('POST', '/api/v1/note/append?path=Work/Plan.md', { text: '  - [ ] Check the numbers', heading: 'Today' });
+      const open = (await a('GET', '/api/v1/tasks?path=Work/Plan.md&state=todo')).data;
+      assert.deepEqual(open.map((x) => x.text), ['Call Jo', 'Send the report ⏫ 📅 2026-12-01', 'Check the numbers']);
+      assert.equal((await a('GET', '/api/v1/tasks?due_before=2026-12-31')).data.length, 1);
+      const r = await a('PUT', '/api/v1/task?path=Work/Plan.md', { match: 'Send the report', state: 'done' });
+      assert.equal(r.status, 409);
+      assert.match(r.data.error, /Finish its 1 sub-item first/);
+      await a('PUT', '/api/v1/task?path=Work/Plan.md', { match: 'Check the numbers', state: 'done' });
+      const done = await a('PUT', '/api/v1/task?path=Work/Plan.md', { match: 'Send the report', state: 'done' });
+      assert.equal(done.data.state, 'done');
+      assert.equal(done.data.heading, 'Complete', 'filed like a click');
+      const stale = await a('PUT', '/api/v1/task?path=Work/Plan.md', { line: 3, expect: 'Something else', state: 'doing' });
+      assert.equal(stale.status, 409);
+      assert.equal((await a('PUT', '/api/v1/task?path=Work/Plan.md', { match: 'Call Jo', text: 'Call Jo back' })).data.text, 'Call Jo back');
+      assert.equal((await a('DELETE', '/api/v1/task?path=Work/Plan.md&match=Call%20Jo')).data.removedLines, 1);
+      assert.doesNotMatch((await a('GET', '/api/v1/note?path=Work/Plan.md')).data.content, /Call Jo/);
+      assert.equal((await a('GET', '/api/v1/search?q=report')).data[0].path, 'Work/Plan.md');
+    });
+
+    await t.test('a read-only token can read but not write', async () => {
+      assert.equal((await ro('GET', '/api/v1/tasks')).status, 200);
+      assert.equal((await ro('POST', '/api/v1/tasks?path=X.md', { text: 'nope' })).status, 403);
+    });
+
+    await t.test('deleting a token, or its user, stops it', async () => {
+      const id = (await alex.call('GET', '/api/tokens')).data.find((x) => x.name === 'Dashboard').id;
+      await alex.call('DELETE', `/api/tokens?id=${id}`);
+      assert.equal((await ro('GET', '/api/v1/notes')).status, 401);
+      const s = api((await sam.call('POST', '/api/tokens', { name: 'gone soon' })).data.token);
+      assert.equal((await s('GET', '/api/v1/notes')).status, 200);
+      await alex.call('DELETE', '/api/users?name=sam');
+      assert.equal((await s('GET', '/api/v1/notes')).status, 401);
+    });
+  } finally { await srv.stop(); }
+});
+
+test('attachments: pasted files, served only to their owner and to links that use them', async () => {
+  const dir = tmp();
+  const data = path.join(dir, 'data');
+  addUser(data, 'alex', 'alex password', '--admin');
+  const srv = await startServer({ TICKMARK_DATA: data, TICKMARK_VAULT: path.join(dir, 'vault'), TICKMARK_PUBLIC_URL: 'https://notes.example.com' });
+  const c = client(srv.base);
+  try {
+    await c.call('POST', '/api/auth/login', { username: 'alex', password: 'alex password' });
+    const png = Buffer.from('\x89PNG\r\n\x1a\nfake image').toString('base64');
+    await c.call('POST', '/api/file', { path: 'Trip.md', content: '# Trip\n' });
+    const a = (await c.call('POST', '/api/attachments', { name: '../My Screenshot!.png', data: png, note: 'Trip.md' })).data;
+    assert.deepEqual([a.name, a.url, a.image], ['My-Screenshot.png', '/attachments/My-Screenshot.png', true]);
+    assert.equal((await c.call('POST', '/api/attachments', { name: 'My Screenshot.png', data: png })).data.name, 'My-Screenshot-1.png', 'never overwrites');
+    const svg = (await c.call('POST', '/api/attachments', { name: 'x.svg', data: Buffer.from('<svg><script>alert(1)</script></svg>').toString('base64') })).data;
+    const got = await fetch(srv.base + a.url, { headers: { Cookie: [...c.jar].map(([k, v]) => `${k}=${v}`).join('; ') } });
+    assert.equal(got.headers.get('content-type'), 'image/png');
+    assert.equal(Buffer.from(await got.arrayBuffer()).toString('base64'), png);
+    const s = await fetch(srv.base + svg.url, { headers: { Cookie: [...c.jar].map(([k, v]) => `${k}=${v}`).join('; ') } });
+    assert.match(s.headers.get('content-security-policy'), /sandbox/, 'an SVG opened on its own runs nothing');
+    assert.equal((await fetch(srv.base + a.url)).status, 401, 'signed out: no');
+    assert.equal((await fetch(srv.base + '/attachments/..%2Fdata%2Fusers.json', { headers: { Cookie: [...c.jar].map(([k, v]) => `${k}=${v}`).join('; ') } })).status, 404);
+
+    await c.call('PUT', '/api/file?path=Trip.md', { content: `# Trip\n![map](${a.url})\n` });
+    let list = (await c.call('GET', '/api/attachments')).data;
+    assert.deepEqual(list.find((x) => x.name === a.name).usedIn, ['Trip.md']);
+    assert.deepEqual(list.find((x) => x.name === 'My-Screenshot-1.png').usedIn, []);
+    assert.equal((await c.call('GET', '/api/tree')).data.files.length, 1, 'hidden from the sidebar');
+
+    // Renaming rewrites the links.
+    const r = (await c.call('PUT', '/api/attachments', { from: a.name, to: 'route map' })).data;
+    assert.deepEqual([r.name, r.notes], ['route-map.png', 1]);
+    assert.equal((await c.call('GET', '/api/file?path=Trip.md')).data.content, '# Trip\n![map](/attachments/route-map.png)\n');
+
+    // A public link serves the files its note links to, and no others.
+    const share = (await c.call('POST', '/api/shares', { path: 'Trip.md' })).data;
+    const tok = share.url.split('/s/')[1];
+    assert.equal((await fetch(`${srv.base}/api/public/${tok}/attachments/route-map.png`)).status, 200);
+    assert.equal((await fetch(`${srv.base}/api/public/${tok}/attachments/My-Screenshot-1.png`)).status, 404);
+    // Linking another note's file into the shared note (as a guest with edit rights could) doesn't expose it.
+    await c.call('PUT', '/api/file?path=Trip.md', { content: `# Trip\n![map](/attachments/route-map.png)\n![x](/attachments/My-Screenshot-1.png)\n` });
+    assert.equal((await fetch(`${srv.base}/api/public/${tok}/attachments/My-Screenshot-1.png`)).status, 404, 'only files pasted into a shared note');
+    // Renaming the note keeps its files public through the link.
+    await c.call('POST', '/api/rename', { from: 'Trip.md', to: 'Trips/Trip 2027.md' });
+    assert.equal((await fetch(`${srv.base}/api/public/${tok}/attachments/route-map.png`)).status, 200);
+
+    await c.call('DELETE', '/api/attachments?name=My-Screenshot-1.png');
+    list = (await c.call('GET', '/api/attachments')).data;
+    assert.deepEqual(list.map((x) => x.name).sort(), ['route-map.png', 'x.svg']);
   } finally { await srv.stop(); }
 });

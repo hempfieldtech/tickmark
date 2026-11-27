@@ -39,8 +39,22 @@
     if (/^my-/.test(p) && !customThemes.some((t) => t.id === p)) p = 'system'; // that custom theme is gone
     root.dataset.themePref = p;
     root.dataset.theme = p === 'system' ? (dark.matches ? 'dark' : 'light') : p;
+    themeColor();
+  }
+  // The browser's title bar / status bar, and the installed app's manifest (splash screen and
+  // window colour), follow the theme's background.
+  function themeColor() {
+    if (!document.body) return;
+    const bg = getComputedStyle(document.body).backgroundColor;
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta && document.body) meta.content = getComputedStyle(document.body).backgroundColor;
+    if (meta) meta.content = bg;
+    const m = bg.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    const link = document.querySelector('link[rel="manifest"]');
+    if (m && link) {
+      const hex = m.slice(1, 4).map((n) => (+n).toString(16).padStart(2, '0')).join('');
+      const href = `/manifest.webmanifest?bg=${hex}`;
+      if (link.getAttribute('href') !== href) link.setAttribute('href', href);
+    }
   }
   apply();
   dark.addEventListener('change', apply);
@@ -55,6 +69,7 @@
   function setCss(css) {
     style.textContent = noCss ? '' : css || '';
     if (!style.isConnected) (document.head || document.documentElement).append(style);
+    themeColor(); // the CSS may change the background
   }
   try { setCss(JSON.parse(localStorage.getItem(CSS_KEY)) || ''); } catch { setCss(''); }
   addEventListener('DOMContentLoaded', () => document.head.append(style)); // last in <head>, so it wins ties

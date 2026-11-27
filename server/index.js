@@ -27,6 +27,9 @@ import { OIDC, OIDCError } from './oidc.js';
 import { settingsCipher } from './secrets.js';
 import { ServerSettings, SSO_FIELDS } from './server-settings.js';
 import { Branding } from './branding.js';
+import { Tokens } from './tokens.js';
+import { apiEndpoint } from './api.js';
+import { AttachmentError } from './attachments.js';
 import { Shares, shareBlocker } from './shares.js';
 import { lineDiff } from './history.js';
 import { DEMO, DemoSessions, demoBlocked } from './demo.js';
@@ -64,6 +67,7 @@ try { ensureWritable(DATA); ensureWritable(VAULT); } catch (e) { console.error(e
 const users = new UserStore(DATA);
 const serverSettings = new ServerSettings(DATA);
 const branding = new Branding(DATA);
+const tokens = new Tokens(DATA);
 const shares = new Shares(DATA);
 const limiter = new LoginLimiter();
 const workspaces = new Map();
@@ -206,6 +210,19 @@ function buildId() {
   return h.digest('hex').slice(0, 12);
 }
 const BUILD = buildId();
+/** Every app file, for the service worker to cache when it installs (so the app opens offline). */
+const SHELL_FILES = (() => {
+  const out = ['/'];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, e.name);
+      if (e.isDirectory()) walk(abs);
+      else if (e.isFile() && !/^(sw\.js|share\.html)$/.test(e.name)) out.push('/' + path.relative(PUBLIC, abs).split(path.sep).join('/'));
+    }
+  };
+  try { walk(PUBLIC); } catch {}
+  return out;
+})();
 const PKG = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')); } catch { return { version: '?' }; } })();
 const STARTED_AT = new Date().toISOString();
 
@@ -221,6 +238,14 @@ const APP_HEADERS = {
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'same-origin',
 };
+/** The manifest in the page's theme colour (splash screen, title bar): theme.js asks for …?bg=<hex>. */
+function themedManifest(src, q) {
+  const bg = /^[0-9a-f]{6}$/i.test(q.get('bg') || '') ? '#' + q.get('bg').toLowerCase() : null;
+  if (!bg) return src;
+  const m = JSON.parse(src);
+  m.background_color = m.theme_color = bg;
+  return JSON.stringify(m, null, 2);
+}
 function serveStatic(req, res, pathname) {
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { return json(res, 400, { error: 'Bad path' }); }
@@ -233,7 +258,8 @@ function serveStatic(req, res, pathname) {
   if (rel === '/index.html' || rel === '/manifest.webmanifest') {
     return fs.readFile(path.join(PUBLIC, rel), 'utf8', (err, src) => {
       if (err) return json(res, 404, { error: 'Not found' });
-      const out = rel === '/index.html' ? branding.html(src).replace('content="dev"', `content="${BUILD}"`).replace(/(href|src)="\/(style\.css|app\.js|theme\.js)"/g, `$1="/$2?v=${BUILD}"`) : branding.manifest(src);
+      const out = rel === '/index.html' ? branding.html(src).replace('content="dev"', `content="${BUILD}"`).replace(/(href|src)="\/(style\.css|app\.js|theme\.js)"/g, `$1="/$2?v=${BUILD}"`)
+        : themedManifest(branding.manifest(src), new URL(req.url, 'http://x').searchParams);
       res.writeHead(200, { 'Content-Type': MIME[path.extname(rel)], 'Cache-Control': 'no-cache', ...(rel === '/index.html' ? APP_HEADERS : {}), 'X-Content-Type-Options': 'nosniff' });
       res.end(out);
     });
@@ -243,7 +269,8 @@ function serveStatic(req, res, pathname) {
     return fs.readFile(path.join(PUBLIC, 'sw.js'), 'utf8', (err, src) => {
       if (err) return json(res, 404, { error: 'Not found' });
       res.writeHead(200, { 'Content-Type': MIME['.js'], 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' });
-      res.end(src.replace(/const CACHE = '[^']*'/, `const CACHE = 'tickmark-${BUILD}'`));
+      res.end(src.replace(/const CACHE = '[^']*'/, `const CACHE = 'tickmark-${BUILD}'`)
+        .replace(/const SHELL = \[[^\]]*\]/, `const SHELL = ${JSON.stringify(SHELL_FILES)}`));
     });
   }
   const abs = path.resolve(PUBLIC, '.' + rel);
@@ -378,7 +405,8 @@ function sessionUser(req) {
   return u;
 }
 
-const publicUser = (u) => ({ name: u.name, admin: !!u.admin, sso: !!u.oidc, hasPassword: !!u.hash, created: u.created });
+const publicUser = (u) => ({ name: u.name, admin: !!u.admin, sso: !!u.oidc, ssoLabel: u.oidc?.label || null, ssoPending: u.oidcPending || null,
+  hasPassword: !!u.hash, created: u.created });
 
 // ---------------------------------------------------------------- SSO
 async function oidcSignIn(claims) {
@@ -387,9 +415,17 @@ async function oidcSignIn(claims) {
     throw new OIDCError("Your account isn't in a group that may use Tickmark.");
   }
   const admin = oidc.adminGroups.length ? groups.some((g) => oidc.adminGroups.includes(g)) : undefined;
-  const link = { iss: claims.iss, sub: claims.sub };
+  // The label (their email or provider username) is only for admins to see who is linked.
+  const label = String(claims.email || claims[oidc.usernameClaim] || '').slice(0, 120) || null;
+  const link = { iss: claims.iss, sub: claims.sub, ...(label ? { label } : {}) };
 
   let u = users.byOidc(link.iss, link.sub);
+  if (u && label && u.oidc.label !== label) u = users.update(u.name, { oidc: link });
+  // An admin paired a local user with this SSO account before it ever signed in (Settings → Users).
+  if (!u) {
+    const paired = users.byPendingOidc([claims.email_verified === false ? null : claims.email, claims[oidc.usernameClaim], oidc.username(claims)]);
+    if (paired) { u = users.update(paired.name, { oidc: link, oidcPending: null }); console.log(`Paired SSO sign-in with user ${u.name}`); }
+  }
   if (!u && oidc.matchUsername) {
     const local = users.get(oidc.username(claims));
     if (local && !local.oidc) u = users.update(local.name, { oidc: link });
@@ -612,6 +648,35 @@ const routes = {
   },
 
   // ---- admin: users
+  // ---- attachments: files pasted or dropped into notes (Settings → Attachments)
+  'GET /api/attachments': ({ ws }) => {
+    const notes = ws.vault.list().files.map((f) => { try { return { path: f.path, content: ws.vault.read(f.path).content }; } catch { return null; } }).filter(Boolean);
+    return ws.attachments.list(notes);
+  },
+  'POST /api/attachments': ({ ws }, q, body) => {
+    const m = String(body.data || '').match(/^(?:data:[^;,]*;base64,)?([A-Za-z0-9+/=\s]+)$/);
+    if (!m) throw new AttachmentError('Send { name, data } with the file as base64');
+    const note = typeof body.note === 'string' && ws.vault.exists(body.note) ? ws.vault.rel(ws.vault.resolve(body.note)) : null;
+    return ws.attachments.add(String(body.name || 'file'), Buffer.from(m[1], 'base64'), { note });
+  },
+  'PUT /api/attachments': ({ ws }, q, body) => {
+    const from = String(body.from || '');
+    const info = ws.attachments.rename(from, String(body.to || ''));
+    // Links to it in notes follow the new name.
+    const olds = [`/attachments/${encodeURIComponent(from)}`, `/attachments/${from}`];
+    let notes = 0;
+    if (info.name !== from) {
+      for (const f of ws.vault.list().files) {
+        if (ws.vault.modify(f.path, (t) => { let n = t; for (const o of olds) n = n.split(o + ')').join(info.url + ')').split(o + '>').join(info.url + '>'); return n; })) notes++;
+      }
+    }
+    return { ...info, notes };
+  },
+  'DELETE /api/attachments': ({ ws }, q) => { ws.attachments.remove(String(q.get('name') || '')); return { ok: true }; },
+  // ---- personal API tokens (Settings → API)
+  'GET /api/tokens': ({ user }) => tokens.list(owner(user)),
+  'POST /api/tokens': ({ user }, q, body) => tokens.create(owner(user), { name: body.name, scope: body.scope, days: body.days }),
+  'DELETE /api/tokens': ({ user }, q) => { tokens.remove(owner(user), String(q.get('id') || '')); return { ok: true }; },
   'GET /api/users': ({ user }) => { admin(user); return users.list().map(publicUser); },
   'POST /api/users': ({ user }, q, body) => {
     admin(user);
@@ -628,6 +693,26 @@ const routes = {
     }
     if (body.password) patch.password = String(body.password);
     if (body.unlinkSso) patch.oidc = null;
+    // Pair this user with an SSO account: either the one another user is signed in with (that user
+    // loses it and is signed out), or one that hasn't signed in yet, by its username or email.
+    if (body.pairWith !== undefined || body.ssoPending !== undefined) {
+      const target = users.get(body.name);
+      if (!target) throw new AuthError('No such user', 404);
+      if (target.oidc && !body.unlinkSso) throw new AuthError(`${target.name} is already linked to an SSO account; unlink it first`);
+      if (body.pairWith) {
+        const from = users.get(body.pairWith);
+        if (!from?.oidc) throw new AuthError(`${body.pairWith} isn't signed in with SSO`);
+        if (from.name === target.name) throw new AuthError('Pick another user');
+        const link = from.oidc;
+        users.update(from.name, { oidc: null });
+        sessions.destroyUser(from.name);
+        patch.oidc = link; patch.oidcPending = null;
+      } else {
+        const v = String(body.ssoPending || '').trim().toLowerCase().slice(0, 120);
+        if (v && !/^[^\s]+$/.test(v)) throw new AuthError('Give the SSO username or email, without spaces');
+        patch.oidcPending = v || null;
+      }
+    }
     return publicUser(users.update(body.name, patch));
   },
   'DELETE /api/users': ({ user }, q) => {
@@ -637,6 +722,7 @@ const routes = {
     users.remove(name);
     sessions.destroyUser(name);
     shares.removeOwner(name);
+    tokens.removeOwner(name);
     closeWorkspace(name);
     return { ok: true };
   },
@@ -753,6 +839,79 @@ async function handleOidc(req, res, url) {
   }
 }
 
+/**
+ * The REST API (server/api.js). A script signs in with a personal token (`Authorization: Bearer tm_…`,
+ * made in Settings → API); the app's own pages (Settings → API's "Try it") use their session.
+ */
+async function handleApi(req, res, url) {
+  try {
+    if (DEMO) return json(res, 404, { error: "The API isn't available in the demo" });
+    const ep = apiEndpoint(req.method, url.pathname);
+    let user = null, who;
+    const bearer = /^Bearer\s/i.test(req.headers.authorization || '');
+    if (bearer) {
+      const t = tokens.check(req.headers.authorization);
+      // A token belongs to a user (or, with sign-in off, to the one-user setup): it stops when they do.
+      const u = t && (MULTI ? users.get(t.owner) : t.owner === null ? {} : null);
+      if (!t || !u) return json(res, 401, { error: 'That token is not valid (deleted, expired, or mistyped)' }, { 'WWW-Authenticate': 'Bearer' });
+      user = MULTI ? u : null;
+      who = { name: MULTI ? u.name : null, via: 'token', token: t.name, scope: t.scope };
+      if (ep && ep.scope === 'write' && t.scope !== 'write') return json(res, 403, { error: 'This token can only read' });
+    } else {
+      if (!MULTI && !checkBasic(req)) { res.writeHead(401, { 'WWW-Authenticate': 'Bearer, Basic realm="Tickmark"' }); return res.end('Authentication required'); }
+      user = MULTI ? sessionUser(req) : null;
+      if (MULTI && !user) return json(res, 401, { error: 'Send a token: Authorization: Bearer tm_… (Settings → API)' }, { 'WWW-Authenticate': 'Bearer' });
+      who = { name: user?.name ?? null, via: 'session', scope: 'write' };
+    }
+    if (!ep) return json(res, 404, { error: 'Unknown endpoint (GET /api/v1 lists them)' });
+    const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req, 6 * 1024 * 1024) : {};
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) throw Object.assign(new Error('Send a JSON object'), { status: 400 });
+    const ws = workspaceFor(user?.name);
+    const onTrash = (p) => shares.removed(owner(user), ws.vault.rel(ws.vault.resolve(p)));
+    json(res, 200, await ep.run({ ws, user, who, onTrash }, url.searchParams, body));
+  } catch (e) {
+    const known = e instanceof CalDAVError || Number.isInteger(e.status);
+    const status = e instanceof CalDAVError ? (e.status === 403 ? 403 : 502) : known ? e.status : 500;
+    if (!known) console.error(e);
+    json(res, status, { error: known ? e.message : 'Something went wrong (see the server log)' });
+  }
+}
+
+/** A file pasted into a note: for whoever's signed in (or holds a token), from their own vault. */
+function serveAttachment(req, res, url) {
+  let name;
+  try { name = decodeURIComponent(url.pathname.slice('/attachments/'.length)); } catch { return json(res, 400, { error: 'Bad name' }); }
+  let ws;
+  if (DEMO) ws = demo.get(req, res);
+  else {
+    const t = /^Bearer\s/i.test(req.headers.authorization || '') ? tokens.check(req.headers.authorization) : null;
+    let user = null;
+    if (t) { user = MULTI ? users.get(t.owner) : null; if (MULTI ? !user : t.owner !== null) return json(res, 401, { error: 'Not signed in' }); }
+    else if (MULTI) { user = sessionUser(req); if (!user) return json(res, 401, { error: 'Not signed in' }); }
+    else if (!checkBasic(req)) { res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Tickmark"' }); return res.end('Authentication required'); }
+    ws = workspaceFor(user?.name);
+  }
+  if (!ws.attachments.serve(name, res, { download: url.searchParams.has('download') })) json(res, 404, { error: 'No such attachment' });
+}
+
+/** An attachment on a public page: only one that a note the link shares actually links to. */
+function publicAttachment(req, res, token, raw) {
+  try {
+    const name = decodeURIComponent(raw);
+    const s = shares.get(token);
+    publicShare(token, null); // validates the link
+    const ws = workspaceFor(s.owner ?? undefined);
+    const notes = s.kind === 'note' ? [s.path] : ws.vault.list().files.map((f) => f.path).filter((p) => p.startsWith(s.path + '/'));
+    // It must have been pasted into one of the shared notes (so a guest who can edit one can't link
+    // in the owner's other files), and still be linked from one of them.
+    const from = ws.attachments.origin(name);
+    const needles = [`/attachments/${encodeURIComponent(name)}`, `/attachments/${name}`];
+    const used = from && notes.includes(from) &&
+      notes.some((p) => { try { const c = ws.vault.read(p).content; return needles.some((n) => c.includes(n)); } catch { return false; } });
+    if (!used || !ws.attachments.serve(name, res)) json(res, 404, { error: 'Not found' });
+  } catch (e) { json(res, e.status || 404, { error: e.status ? e.message : 'Not found' }); }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   if (!allowedHost(req)) {
@@ -805,6 +964,10 @@ const server = http.createServer(async (req, res) => {
       return json(res, e.status || 500, { error: e.status ? e.message : 'Something went wrong' });
     }
   }
+  if (url.pathname === '/api/v1' || url.pathname.startsWith('/api/v1/')) return handleApi(req, res, url);
+  if (req.method === 'GET' && url.pathname.startsWith('/attachments/')) return serveAttachment(req, res, url);
+  const pubAttach = req.method === 'GET' && url.pathname.match(/^\/api\/public\/([\w-]+)\/attachments\/([^/]+)$/);
+  if (pubAttach) return publicAttachment(req, res, pubAttach[1], pubAttach[2]);
   // The app's own scripts, styles and icons are public (a public link's page needs them, and they're
   // the published source anyway); the app page itself and everything under /api/ still ask for the password.
   const asset = req.method === 'GET' && !url.pathname.startsWith('/api/') && !url.pathname.startsWith('/auth/') &&
@@ -833,6 +996,9 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
       res.write(`event: sync\ndata: ${JSON.stringify(ws.sync.status)}\n\n`);
       ws.clients.add(res);
+      // Coming back after a while: check the CalDAV servers now rather than at the next tick.
+      const reach = ws.sync.status.reach;
+      if (ws.pingMs && !DEMO && (!reach || Date.now() - Date.parse(reach.at) > ws.pingMs)) ws.sync.ping().catch(() => {});
       res.write(`event: presence\ndata: ${JSON.stringify(ws.presenceState())}\n\n`);
       const pid = url.searchParams.get('pid');
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
@@ -849,7 +1015,7 @@ const server = http.createServer(async (req, res) => {
     // decrypted (that's exactly when an admin needs to fix the SSO settings).
     if (DEMO) {
       if (key === 'PUT /api/config' && body.accounts) throw Object.assign(new Error('CalDAV accounts are off in the demo'), { status: 403 });
-      if (/^(PUT|POST) \/api\/(file|folder|trash\/restore|history\/restore)$/.test(key)) demo.checkSize(wsOf());
+      if (/^(PUT|POST) \/api\/(file|folder|trash\/restore|history\/restore|attachments)$/.test(key)) demo.checkSize(wsOf());
     }
     const ctx = { user, req, res, get ws() { return wsOf(); } };
     json(res, 200, await handler(ctx, url.searchParams, body));

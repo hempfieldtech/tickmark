@@ -79,6 +79,11 @@ export class UserStore {
   list() { this.reload(); return this.users; }
   get(name) { return this.list().find((u) => u.name === normName(name)) || null; }
   byOidc(iss, sub) { return this.list().find((u) => u.oidc?.iss === iss && u.oidc?.sub === sub) || null; }
+  /** The local user an admin set to pair with the SSO account called `names` (username or email) on its first sign-in. */
+  byPendingOidc(names) {
+    const want = names.filter(Boolean).map((n) => String(n).toLowerCase());
+    return this.list().find((u) => !u.oidc && u.oidcPending && want.includes(u.oidcPending)) || null;
+  }
   admins() { return this.list().filter((u) => u.admin); }
 
   add({ name, password = null, admin = false, vault = null, oidc = null }) {
@@ -111,6 +116,7 @@ export class UserStore {
       u.admin = !!patch.admin;
     }
     if (patch.oidc !== undefined) u.oidc = patch.oidc;
+    if (patch.oidcPending !== undefined) { if (patch.oidcPending) u.oidcPending = patch.oidcPending; else delete u.oidcPending; }
     this.save();
     return u;
   }

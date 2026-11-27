@@ -241,21 +241,16 @@ export function buildTaskLine(task, model, { doneDate = null, extraTags = [] } =
 
 /**
  * Completing a recurring task: the line stays open with the next date (keeping its block id, so it
- * stays linked to the same CalDAV todo), and a completed copy without the rule goes right below it.
- * Returns { open, openLine, historyLine }, or null if the series is over.
+ * stays linked to the same CalDAV todo), like a task app does. No completed copy is left behind
+ * (the note's history keeps every version). Returns { open, openLine }, or null if the series is over.
  */
 export function advanceRecurring(task, { doneDate, today }) {
   if (!task.recur) return null;
   const when = doneDate || task.doneDate || today;
   const next = nextOccurrence(task.recur, { due: task.due, doneDate: when, today });
   if (!next) return null;
-  const model = taskModel(task);
-  const open = { ...model, done: false, due: next.due, recur: next.rule };
-  return {
-    open,
-    openLine: buildTaskLine(task, open),
-    historyLine: buildTaskLine({ ...task, blockId: null }, { ...model, done: true, recur: null }, { doneDate: when }),
-  };
+  const open = { ...taskModel(task), done: false, due: next.due, recur: next.rule };
+  return { open, openLine: buildTaskLine(task, open) };
 }
 
 /** Toggle the checkbox on a given line of text. Returns the new text (or the same text if not a checkbox). */
@@ -271,7 +266,7 @@ export function toggleLine(text, lineNo, { stampDone = true } = {}) {
     const t = tm && { prefix: tm[1], bullet: tm[2], done: false, ...parseTaskBody(tm[4]) };
     const a = t?.recur && advanceRecurring(t, { today: localDate(new Date()) });
     if (a) {
-      lines.splice(lineNo, 1, a.openLine, a.historyLine);
+      lines[lineNo] = a.openLine;
       return lines.join('\n');
     }
   }
@@ -502,7 +497,11 @@ export function cancelSubtasks(text, lineNo) {
  * - Cancelling an item cancels its unfinished sub-items too (they aren't needed any more).
  * - With moveCompleted, it's filed under (or back out of) "Complete" / "Cancelled".
  */
-export function changeItem(text, lineNo, ch = null, { moveCompleted = true } = {}) {
+export function changeItem(text, lineNo, ch = null, opts = {}) {
+  const r = changeItemOnly(text, lineNo, ch, opts);
+  return r.text === text ? r : { ...r, text: autoSort(r.text) };
+}
+function changeItemOnly(text, lineNo, ch = null, { moveCompleted = true } = {}) {
   const was = (text.split('\n')[lineNo] ?? '').match(ITEM_STATE)?.[1];
   if (was === undefined) return { text, open: 0 };
   const finished = (c) => 'xX-'.includes(c);
@@ -518,7 +517,86 @@ export function changeItem(text, lineNo, ch = null, { moveCompleted = true } = {
   next = 'xX'.includes(want) && !finished(was) ? toggleLine(next, lineNo) : setTaskState(next, lineNo, want);
   const kind = (c) => (c === '-' ? 'cancelled' : 'xX'.includes(c) ? 'done' : 'open');
   if (next === text || !moveCompleted || kind(want) === kind(was)) return { text: next, open: 0 };
-  // A recurring item leaves a completed copy on the line below; that's the one to file away.
-  const at = next.split('\n').length > text.split('\n').length ? lineNo + 1 : lineNo;
-  return { text: fileCompleted(next, at) ?? next, open: 0 };
+  // A recurring item moved on to its next date and stays open where it is.
+  if (kind(next.split('\n')[lineNo]?.match(ITEM_STATE)?.[1] ?? ' ') === 'open' && kind(want) === 'done') return { text: next, open: 0 };
+  return { text: fileCompleted(next, lineNo) ?? next, open: 0 };
+}
+
+// ---------------------------------------------------------------- sorting
+// "Sort tasks" (⋯ menu, command palette) orders each run of checklist items in a note: by due date
+// (undated last), priority (highest first), state (in progress, to do, done, cancelled) or name.
+// A note whose frontmatter says `sort-tasks: due, priority` stays sorted that way: whenever an item
+// is checked, here, on a public page, through the API or by sync. Sub-items move with their item.
+export const SORT_KEYS = { due: 'Due date', priority: 'Priority', state: 'State', name: 'Name' };
+const PRIORITY_RANK = { '🔺': 0, '⏫': 1, '🔼': 2, '🔽': 4, '⏬': 5 };
+const STATE_RANK = { '/': 0, ' ': 1, x: 2, X: 2, '-': 3 };
+const TOP_ITEM = /^(\s*)(?:[-*+]|\d+[.)])\s+\[([ xX/-])\](?:\s+(.*))?$/;
+
+/** The sort keys a note's frontmatter asks for (`sort-tasks: due, priority`), or []. */
+export function sortKeysFrom(text) {
+  if (!/^---\r?\n/.test(text)) return [];
+  const end = text.search(/\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
+  if (end < 0) return [];
+  const m = text.slice(0, end).match(/^sort-tasks\s*:\s*(.+)$/im);
+  if (!m) return [];
+  return m[1].replace(/[[\]"']/g, '').split(/[,\s]+/).map((k) => k.toLowerCase()).map((k) => (k === 'title' ? 'name' : k)).filter((k) => SORT_KEYS[k]);
+}
+export const autoSort = (text) => { const k = sortKeysFrom(text); return k.length ? sortTasks(text, k) : text; };
+
+function compareBy(keys) {
+  const val = (it, k) => {
+    if (k === 'due') return it.due || '\uffff';
+    if (k === 'priority') return it.prio;
+    if (k === 'state') return STATE_RANK[it.ch] ?? 1;
+    return it.name;
+  };
+  return (a, b) => {
+    for (const k of keys) {
+      const x = val(a, k), y = val(b, k);
+      const c = typeof x === 'number' ? x - y : k === 'name' ? x.localeCompare(y, undefined, { sensitivity: 'base', numeric: true }) : x < y ? -1 : x > y ? 1 : 0;
+      if (c) return c;
+    }
+    return a.i - b.i; // ties keep their order
+  };
+}
+
+/** Sort every run of checklist items in the text by `keys` (see SORT_KEYS). Returns the new text. */
+export function sortTasks(text, keys) {
+  keys = (Array.isArray(keys) ? keys : [keys]).filter((k) => SORT_KEYS[k]);
+  if (!keys.length) return text;
+  const lines = text.split('\n');
+  const out = [];
+  const cmp = compareBy(keys);
+  let i = 0, fence = null;
+  // Skip the frontmatter.
+  if (lines[0]?.trim() === '---') {
+    const end = lines.findIndex((l, j) => j > 0 && /^(---|\.\.\.)\s*$/.test(l));
+    if (end > 0) { out.push(...lines.slice(0, end + 1)); i = end + 1; }
+  }
+  while (i < lines.length) {
+    const f = lines[i].match(FENCE);
+    if (fence || f) {
+      if (fence && f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+      else if (!fence && f) fence = f[1];
+      out.push(lines[i++]);
+      continue;
+    }
+    const m = lines[i].match(TOP_ITEM);
+    if (!m) { out.push(lines[i++]); continue; }
+    // A run: items at this indentation, each with the more-indented lines under it.
+    const indent = m[1].length;
+    const items = [];
+    while (i < lines.length) {
+      const t = lines[i].match(TOP_ITEM);
+      if (!t || t[1].length !== indent) break;
+      const start = i++;
+      while (i < lines.length && lines[i].trim() && lines[i].match(/^\s*/)[0].length > indent && !FENCE.test(lines[i])) i++;
+      const body = t[3] || '';
+      const parsed = parseTaskBody(body);
+      items.push({ i: items.length, lines: lines.slice(start, i), ch: t[2], due: parsed.due, name: parsed.title.toLowerCase(),
+        prio: PRIORITY_RANK[body.match(PRIORITY)?.[1]] ?? 3 });
+    }
+    out.push(...items.sort(cmp).flatMap((it) => it.lines));
+  }
+  return out.join('\n');
 }

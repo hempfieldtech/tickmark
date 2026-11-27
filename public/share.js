@@ -21,6 +21,7 @@ function resolve(target) {
   if (!t) return null;
   return files.find((f) => stem(f).toLowerCase() === t) || files.find((f) => title(f).toLowerCase() === t.split('/').pop()) || null;
 }
+const attachmentUrl = (href) => `/api/public/${token}/attachments/${href.slice('/attachments/'.length).split(/[?#]/)[0]}`;
 const hrefFor = (file) => `${base}/${file.split('/').map(encodeURIComponent).join('/')}`;
 
 marked.use({
@@ -31,6 +32,7 @@ marked.use({
     link({ href, title: t, tokens }) {
       const text = this.parser.parseInline(tokens);
       if (!safeUrl(href)) return text;
+      if (href.startsWith('/attachments/')) return `<a href="${esc(attachmentUrl(href))}" target="_blank" rel="noopener">${text}</a>`;
       const ext = /^(https?:|mailto:)/i.test(href);
       return `<a href="${esc(href)}"${t ? ` title="${esc(t)}"` : ''}${ext ? ' target="_blank" rel="noopener noreferrer"' : ''}>${text}</a>`;
     },
@@ -39,6 +41,14 @@ marked.use({
       return `<div class="codeblock" data-family="${esc(h.family)}"${h.label ? ` data-lang="${esc(h.label)}"` : ''}><pre><code>${h.html}</code></pre></div>\n`;
     },
     image({ href, title: t, text }) {
+      // A file pasted into the note: served through this link (only files the shared notes link to).
+      if (href.startsWith('/attachments/')) {
+        const u = esc(attachmentUrl(href)), ext = (href.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
+        if (/^(mp4|webm|mov|m4v|ogv)$/.test(ext)) return `<video src="${u}" controls preload="metadata"></video>`;
+        if (/^(mp3|m4a|ogg|oga|wav|flac|aac|opus)$/.test(ext)) return `<audio src="${u}" controls preload="metadata"></audio>`;
+        if (!/^(png|jpe?g|gif|webp|avif|svg|bmp|ico)$/.test(ext)) return `<a href="${u}" target="_blank" rel="noopener">📎 ${esc(text || decodeURIComponent(href.split('/').pop()))}</a>`;
+        return `<img src="${u}" alt="${esc(text)}"${t ? ` title="${esc(t)}"` : ''} loading="lazy">`;
+      }
       if (!safeUrl(href) || !/^https?:/i.test(href)) return esc(text); // vault-relative images aren't shared
       return `<img src="${esc(href)}" alt="${esc(text)}"${t ? ` title="${esc(t)}"` : ''} loading="lazy" referrerpolicy="no-referrer">`;
     },
