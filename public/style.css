@@ -953,3 +953,15 @@ button.toc-twist:hover { background: color-mix(in srgb, var(--text) 8%, transpar
 .api-new input, .api-new select { height: 34px; box-sizing: border-box; }
 .att-list { padding-left: 0; list-style: none; display: grid; gap: 8px; }
 .att-info a { color: var(--accent); }
+
+/* Filtering the note's checklist by state (click the counts in the bar under the note) */
+#wc-tasks .st-count { font: inherit; color: inherit; background: none; border: 1px solid transparent; border-radius: 999px; padding: 0 7px; cursor: pointer; }
+#wc-tasks .st-count:hover { border-color: var(--line); color: var(--text); }
+#wc-tasks .st-count.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+#preview.task-filtered li[data-st] { display: none; }
+#preview.f-todo li[data-st="todo"], #preview.f-todo li[data-st]:has(li[data-st="todo"]),
+#preview.f-progress li[data-st="progress"], #preview.f-progress li[data-st]:has(li[data-st="progress"]),
+#preview.f-done li[data-st="done"], #preview.f-done li[data-st]:has(li[data-st="done"]),
+#preview.f-cancelled li[data-st="cancelled"], #preview.f-cancelled li[data-st]:has(li[data-st="cancelled"]) { display: list-item; }
+.filter-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: var(--radius); padding: 6px 12px; margin-bottom: 1em; }
+.filter-banner .link-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; font-weight: 600; }

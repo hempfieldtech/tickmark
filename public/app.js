@@ -75,6 +75,7 @@ const el = {
 const S = {
   config: store.get('config'),
   files: [], folders: [], inbox: 'Inbox.md',
+  taskFilter: new Set(), // checklist states the preview shows (empty = all); see applyTaskFilter
   path: null, base: '', hash: null,
   saving: null, saveAgain: false,
   view: store.get('view', 'split'),
@@ -280,6 +281,7 @@ function renderPreview() {
     cb.dataset.line = line;
     if (cb.dataset.state === 'progress') { cb.indeterminate = true; cb.title = 'In progress'; li?.classList.add('progress-item'); }
     if (cb.dataset.state === 'cancelled') { cb.title = 'Cancelled'; li?.classList.add('cancelled-item'); }
+    if (li) li.dataset.st = cb.dataset.state === 'progress' ? 'progress' : cb.dataset.state === 'cancelled' ? 'cancelled' : cb.checked ? 'done' : 'todo';
     if (cb.checked && li) {
       li.classList.add('done-item');
       li.querySelectorAll(':scope > .due, :scope > p > .due').forEach((d) => d.classList.remove('overdue', 'today'));
@@ -297,6 +299,7 @@ function renderPreview() {
   });
   el.preview.querySelectorAll('a.wikilink').forEach((a) => { if (!resolveLink(a.dataset.target)) a.classList.add('missing'); });
   applyFolds(true);
+  applyTaskFilter();
   fillEmbeds(el.preview, [S.path]);
 }
 
@@ -591,13 +594,37 @@ function renderWordCount() {
   if (S.lineNumbers) $('#wc-lines').textContent = plural(lines.length, 'line');
   const count = { ' ': 0, '/': 0, x: 0, '-': 0 };
   for (const ln of checkboxLines(text)) { const ch = lines[ln].match(/\[([ xX/-])\]/)?.[1]; if (ch) count[ch === 'X' ? 'x' : ch]++; }
-  const shown = TASK_STATES.filter(([ch]) => count[ch]);
+  const shown = TASK_STATES.filter(([ch, cls]) => count[ch] || S.taskFilter.has(cls)); // a filtered state stays clickable at 0
   const tasks = $('#wc-tasks');
   tasks.hidden = !shown.length;
-  tasks.innerHTML = shown.map(([ch, cls, name]) => `<span class="st-count" title="${count[ch]} ${name}"><span class="st st-${cls}"></span>${count[ch]} ${name}</span>`).join('');
-  tasks.title = 'Checklist items in this note';
+  tasks.innerHTML = shown.map(([ch, cls, name]) => `<button type="button" class="st-count${S.taskFilter.has(cls) ? ' on' : ''}" data-st="${cls}" aria-pressed="${S.taskFilter.has(cls)}" title="${S.taskFilter.has(cls) ? `Showing ${name} items: click to show all` : `Show only ${name} items (click more to add them)`}"><span class="st st-${cls}"></span>${count[ch]} ${name}</button>`).join('');
+  tasks.title = 'Checklist items in this note: click a state to filter';
   renderShareBadge();
 }
+// ---- filter the note's checklist by state: click the counts in the bar under the note
+// (S.taskFilter holds 'todo' / 'progress' / 'done' / 'cancelled'; empty shows everything). The
+// preview hides the other items; a parent stays when one of its sub-items matches.
+function applyTaskFilter() {
+  const on = [...S.taskFilter];
+  el.preview.classList.toggle('task-filtered', on.length > 0);
+  for (const [, cls] of TASK_STATES) el.preview.classList.toggle('f-' + cls, S.taskFilter.has(cls));
+  let bar = el.preview.querySelector(':scope > .filter-banner');
+  if (!on.length) { bar?.remove(); return; }
+  if (!bar) { bar = document.createElement('div'); bar.className = 'filter-banner'; el.preview.prepend(bar); }
+  const names = TASK_STATES.filter(([, cls]) => S.taskFilter.has(cls)).map(([, , n]) => n);
+  bar.innerHTML = `Showing only ${esc(names.join(' and '))} items <button type="button" class="link-btn" data-clear-filter>Show all</button>`;
+}
+function setTaskFilter(cls) {
+  if (cls == null) S.taskFilter.clear();
+  else if (S.taskFilter.has(cls)) S.taskFilter.delete(cls);
+  else S.taskFilter.add(cls);
+  applyTaskFilter();
+  renderWordCount();
+  if (S.taskFilter.size && effectiveView() === 'edit') toast('The filter shows in the preview (Split or Preview)');
+}
+$('#wc-tasks').addEventListener('click', (e) => { const b = e.target.closest('button[data-st]'); if (b) setTaskFilter(b.dataset.st); });
+el.preview.addEventListener('click', (e) => { if (e.target.closest('[data-clear-filter]')) setTaskFilter(null); });
+
 const scheduleWordCount = (() => { let t = 0; return () => { clearTimeout(t); t = setTimeout(renderWordCount, 150); }; })();
 
 function resolveLink(target) {
@@ -1287,6 +1314,7 @@ async function open(path, { line = null, push = true, find = null } = {}) {
     file = { path, content: pend.baseContent, hash: null };
   }
   const pend = store.get(pendingKey(path));
+  if (S.path !== path) S.taskFilter.clear();
   S.path = path;
   S.base = file.content;
   S.hash = file.hash;
