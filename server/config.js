@@ -24,7 +24,7 @@ const DEFAULTS = {
   prefs: {},
 };
 
-const PREF_BOOLS = ['vim', 'lineNumbers', 'zen'];
+const PREF_BOOLS = ['vim', 'lineNumbers', 'zen', 'zeroCounts'];
 /** Merge a prefs patch into the saved prefs; unknown keys and odd values are dropped. */
 export function cleanPrefs(prev, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw bad('Preferences must be an object');

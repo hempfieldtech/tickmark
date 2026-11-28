@@ -17,7 +17,7 @@ const enc = encodeURIComponent;
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 // Per-user keys (notes cache, unsaved edits, settings) are namespaced by the signed-in user, so two
 // people sharing a browser never see, or save into, each other's notes. View prefs are per device.
-const DEVICE_KEYS = new Set(['view', 'noSidebar', 'vim', 'lineNumbers', 'zen', 'sideWidth']);
+const DEVICE_KEYS = new Set(['view', 'noSidebar', 'vim', 'lineNumbers', 'zen', 'zeroCounts', 'sideWidth']);
 // Theme and editor options are also saved on the server (config.prefs), so they follow you between devices
 // and survive a cleared cache; the copies in localStorage just make them apply before the server answers.
 let prefsFromServer = false;
@@ -594,7 +594,8 @@ function renderWordCount() {
   if (S.lineNumbers) $('#wc-lines').textContent = plural(lines.length, 'line');
   const count = { ' ': 0, '/': 0, x: 0, '-': 0 };
   for (const ln of checkboxLines(text)) { const ch = lines[ln].match(/\[([ xX/-])\]/)?.[1]; if (ch) count[ch === 'X' ? 'x' : ch]++; }
-  const shown = TASK_STATES.filter(([ch, cls]) => count[ch] || S.taskFilter.has(cls)); // a filtered state stays clickable at 0
+  // to do and in progress always show (to filter on) unless zero counts are turned off; a filtered state stays clickable at 0
+  const shown = TASK_STATES.filter(([ch, cls]) => count[ch] || S.taskFilter.has(cls) || (S.zeroCounts && (cls === 'todo' || cls === 'progress')));
   const tasks = $('#wc-tasks');
   tasks.hidden = !shown.length;
   tasks.innerHTML = shown.map(([ch, cls, name]) => `<button type="button" class="st-count${S.taskFilter.has(cls) ? ' on' : ''}" data-st="${cls}" aria-pressed="${S.taskFilter.has(cls)}" title="${S.taskFilter.has(cls) ? `Showing ${name} items: click to show all` : `Show only ${name} items (click more to add them)`}"><span class="st st-${cls}"></span>${count[ch]} ${name}</button>`).join('');
@@ -986,6 +987,14 @@ el.editor.addEventListener('scroll', () => {
 
 // ---- line numbers (Settings → Editor): a gutter beside the text, one number per line however it wraps
 const gutter = $('#gutter'), gutterIn = gutter.firstElementChild;
+S.zeroCounts = store.get('zeroCounts', true) !== false;
+function setZeroCounts(on) {
+  S.zeroCounts = !!on;
+  store.set('zeroCounts', S.zeroCounts);
+  savePref('zeroCounts', S.zeroCounts);
+  if ($('#opt-zero')) $('#opt-zero').checked = S.zeroCounts;
+  renderWordCount();
+}
 S.lineNumbers = !!store.get('lineNumbers', false);
 function setLineNumbers(on) {
   S.lineNumbers = !!on;
@@ -2250,7 +2259,7 @@ function showSection(sec) {
   if (sec === 'about') { loadAbout(); loadAboutTasks(); }
   if (sec === 'api') loadApi();
   if (sec === 'attachments') loadAttachments();
-  if (sec === 'editor') { $('#opt-vim').checked = S.vim; $('#opt-lines').checked = S.lineNumbers; $('#opt-zen').checked = S.zen; }
+  if (sec === 'editor') { $('#opt-vim').checked = S.vim; $('#opt-lines').checked = S.lineNumbers; $('#opt-zen').checked = S.zen; $('#opt-zero').checked = S.zeroCounts; }
   $('#btn-logout').hidden = !isMulti();
   renderSubnav();
   setTimeout(renderSubnav, 400); // sections that load their content (Users, SSO…) may add or hide headings
@@ -2322,6 +2331,7 @@ new MutationObserver(() => { if (setDlg.open) renderSubnav(); }).observe(account
 $('#opt-vim').onchange = (e) => setVim(e.target.checked);
 $('#opt-lines').onchange = (e) => setLineNumbers(e.target.checked);
 $('#opt-zen').onchange = (e) => setZen(e.target.checked);
+$('#opt-zero').onchange = (e) => setZeroCounts(e.target.checked);
 
 // ---- Settings → Attachments: the files pasted into notes, which notes use them, and tidying up
 let attachList = [];
@@ -4178,7 +4188,7 @@ document.addEventListener('keydown', (e) => {
 function applyPrefs(p) {
   if (!p || !Object.keys(p).length) {
     if (!S.config) return;
-    api('PUT', '/api/config', { prefs: { theme: window.tickmarkTheme?.get() || 'system', vim: S.vim, lineNumbers: S.lineNumbers, zen: S.zen } })
+    api('PUT', '/api/config', { prefs: { theme: window.tickmarkTheme?.get() || 'system', vim: S.vim, lineNumbers: S.lineNumbers, zen: S.zen, zeroCounts: S.zeroCounts } })
       .then((c) => { S.config = c; store.set('config', c); }).catch(() => {});
     return;
   }
@@ -4188,6 +4198,7 @@ function applyPrefs(p) {
     if (p.vim !== undefined && p.vim !== S.vim) setVim(p.vim);
     if (p.lineNumbers !== undefined && p.lineNumbers !== S.lineNumbers) setLineNumbers(p.lineNumbers);
     if (p.zen !== undefined && p.zen !== S.zen) setZen(p.zen);
+    if (p.zeroCounts !== undefined && p.zeroCounts !== S.zeroCounts) setZeroCounts(p.zeroCounts);
   } finally { prefsFromServer = false; }
 }
 addEventListener('tickmark-theme', (e) => savePref('theme', e.detail));
