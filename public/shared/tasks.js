@@ -541,7 +541,137 @@ export function sortKeysFrom(text) {
   if (!m) return [];
   return m[1].replace(/[[\]"']/g, '').split(/[,\s]+/).map((k) => k.toLowerCase()).map((k) => (k === 'title' ? 'name' : k)).filter((k) => SORT_KEYS[k]);
 }
-export const autoSort = (text) => { const k = sortKeysFrom(text); return k.length ? sortTasks(text, k) : text; };
+export const autoSort = (text, today = localDate(new Date())) => {
+  text = fileByDue(text, dueHeadersFrom(text), today); // `due-headers:` notes file tasks by due date first
+  const k = sortKeysFrom(text);
+  return k.length ? sortTasks(text, k) : text;
+};
+
+// ---------------------------------------------------------------- due-date headers
+// A note whose frontmatter says `due-headers: today` (or `overdue=Late, today=Due today, tomorrow,
+// week=This week, later`) keeps its open, dated checklist items under headings by due date: an item
+// due today moves under "Today" (created if missing), and back out when its date no longer fits
+// (put above the first due-date heading). Only enabled groups are used; without an `overdue` group,
+// overdue items count as `today`, and without `tomorrow`, tomorrow counts as `week`. Undated items
+// and items outside the enabled groups stay where they are. Runs wherever autoSort does, and the
+// server re-runs it when the date changes.
+export const DUE_BUCKETS = { overdue: 'Overdue', today: 'Today', tomorrow: 'Tomorrow', week: 'This week', later: 'Later' };
+
+/** { bucket: heading name } from a note's `due-headers:` frontmatter, in DUE_BUCKETS order; {} if none. */
+export function dueHeadersFrom(text) {
+  if (!/^---\r?\n/.test(text)) return {};
+  const end = text.search(/\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
+  if (end < 0) return {};
+  const m = text.slice(0, end).match(/^due-headers\s*:\s*(.+)$/im);
+  if (!m) return {};
+  const want = {};
+  for (const part of m[1].replace(/^\s*\[|\]\s*$/g, '').split(',')) {
+    const [k, ...name] = part.split('=');
+    const key = k.trim().replace(/^["']|["']$/g, '').toLowerCase();
+    if (!DUE_BUCKETS[key]) continue;
+    const label = name.join('=').trim().replace(/^["']|["']$/g, '');
+    want[key] = label || DUE_BUCKETS[key];
+  }
+  return Object.fromEntries(Object.keys(DUE_BUCKETS).filter((k) => want[k]).map((k) => [k, want[k]]));
+}
+
+const addDays = (ymd, n) => {
+  const [y, mo, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, mo - 1, d + n));
+  return dt.toISOString().slice(0, 10);
+};
+
+/** Which enabled group a due date falls in (see DUE_BUCKETS), or null. */
+export function dueBucket(due, today, buckets) {
+  if (!due || !/^\d{4}-\d{2}-\d{2}$/.test(due)) return null;
+  let b = due < today ? 'overdue' : due === today ? 'today' : due === addDays(today, 1) ? 'tomorrow' : due <= addDays(today, 7) ? 'week' : 'later';
+  if (!buckets[b] && b === 'overdue') b = 'today';
+  if (!buckets[b] && b === 'tomorrow') b = 'week';
+  return buckets[b] ? b : null;
+}
+
+/** Move open, dated top-level items under their due-date headings (see above). Returns the new text. */
+export function fileByDue(text, buckets, today = localDate(new Date())) {
+  if (!buckets || !Object.keys(buckets).length) return text;
+  const order = Object.keys(DUE_BUCKETS);
+  const names = Object.values(buckets);
+  const isDueHeading = (name) => names.some((n) => sameSection(name, n));
+  for (let guard = 0; guard < 500; guard++) {
+    const lines = text.split('\n');
+    // Headings and top-level open items, outside code blocks and the frontmatter.
+    const heads = [];
+    let move = null, fence = null, i = 0;
+    if (lines[0]?.trim() === '---') {
+      const end = lines.findIndex((l, j) => j > 0 && /^(---|\.\.\.)\s*$/.test(l));
+      if (end > 0) i = end + 1;
+    }
+    for (; i < lines.length && !move; i++) {
+      const f = lines[i].match(FENCE);
+      if (fence) { if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null; continue; }
+      if (f) { fence = f[1]; continue; }
+      const h = lines[i].match(HEADING);
+      if (h) { heads.push({ i, level: h[1].length, name: sectionName(h[2]) }); continue; }
+      const it = lines[i].match(/^(?:[-*+]|\d+[.)])\s+\[([ /])\]\s+(.*)$/); // top level, to do / in progress
+      if (!it) continue;
+      const own = heads[heads.length - 1] || null;
+      const b = dueBucket(parseTaskBody(it[2]).due, today, buckets);
+      if (b && own && sameSection(own.name, buckets[b])) continue; // already filed
+      if (!b && !(own && isDueHeading(own.name))) continue; // not ours to move
+      move = { at: i, bucket: b };
+    }
+    if (!move) return text;
+    // The item and its sub-items (more indented lines; blank lines only if more sub-items follow).
+    let last = move.at;
+    for (let j = move.at + 1; j < lines.length; j++) {
+      if (/^\s+\S/.test(lines[j])) last = j;
+      else if (lines[j].trim()) break;
+    }
+    const block = lines.slice(move.at, last + 1);
+    const out = [...lines];
+    out.splice(move.at, block.length);
+    if (move.at > 0 && !out[move.at - 1]?.trim() && move.at < out.length && !out[move.at].trim()) out.splice(move.at, 1); // no doubled blank line
+    // Headings again, on the text without the block.
+    const hs = [];
+    let fz = null;
+    for (let j = 0; j < out.length; j++) {
+      const f = out[j].match(FENCE);
+      if (fz) { if (f && f[1][0] === fz[0] && f[1].length >= fz.length) fz = null; continue; }
+      if (f) { fz = f[1]; continue; }
+      const h = out[j].match(HEADING);
+      if (h) hs.push({ i: j, level: h[1].length, name: sectionName(h[2]) });
+    }
+    const sectionEnd = (h) => (hs.find((x) => x.i > h.i && x.level <= h.level) || { i: out.length }).i;
+    const appendAt = (h) => { let e = sectionEnd(h); while (e > h.i + 1 && !out[e - 1].trim()) e--; return e; };
+    const dueHeads = hs.filter((h) => isDueHeading(h.name));
+    if (!move.bucket) {
+      // Out of the due-date headings: just above the first one.
+      let at = dueHeads[0].i;
+      while (at > 0 && !out[at - 1].trim()) at--;
+      out.splice(at, 0, ...block);
+      text = out.join('\n');
+      continue;
+    }
+    const name = buckets[move.bucket];
+    const target = hs.find((h) => sameSection(h.name, name));
+    if (target) {
+      out.splice(appendAt(target), 0, ...block);
+    } else {
+      // A new heading, in group order among the existing ones; otherwise before Complete/Cancelled, or at the end.
+      const rank = order.indexOf(move.bucket);
+      const later = dueHeads.find((h) => order.indexOf(Object.keys(buckets).find((k) => sameSection(h.name, buckets[k]))) > rank);
+      const finished = hs.find((h) => isFinishedHeading(h.name));
+      const level = (dueHeads[0] || finished)?.level || 2;
+      const earlier = [...dueHeads].reverse().find((h) => order.indexOf(Object.keys(buckets).find((k) => sameSection(h.name, buckets[k]))) < rank);
+      let at = later ? later.i : earlier ? sectionEnd(earlier) : finished ? finished.i : out.length;
+      while (at > 0 && !out[at - 1].trim()) at--;
+      const ins = [...(at > 0 ? [''] : []), '#'.repeat(level) + ' ' + name, ...block];
+      if (at < out.length && out[at].trim()) ins.push(''); // keep one blank line before what follows
+      out.splice(at, 0, ...ins);
+    }
+    text = out.join('\n');
+  }
+  return text;
+}
 
 function compareBy(keys) {
   const val = (it, k) => {

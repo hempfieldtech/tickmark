@@ -514,3 +514,59 @@ test('sorting checklist items: by due, priority, state, name; kept sorted via fr
   assert.deepEqual(titles(after), ['Done', 'Soon', 'Later'], 'changing an item re-sorts the note');
   assert.deepEqual(titles(changeItem('---\nsort-tasks: name\n---\n- [ ] b\n- [ ] a\n', 3).text), ['a', 'b']);
 });
+
+// ---------------------------------------------------------------- due-date headers (due-headers:)
+test('due-headers: files open dated items under due-date headings', async () => {
+  const { fileByDue, dueHeadersFrom, autoSort } = await import('../public/shared/tasks.js');
+  const T = '2026-03-10';
+  const note = (fm, body) => `---\ndue-headers: ${fm}\n---\n# Plan\n\n${body}`;
+
+  // today only: today and overdue move under a new "## Today" before Complete; the rest stay
+  let src = note('today', [
+    '- [ ] write report 📅 2026-03-10 ^a1',
+    '- [ ] late thing 📅 2026-03-02 ^a2',
+    '- [ ] next week 📅 2026-03-15 ^a3',
+    '- [ ] undated ^a4',
+    '  - [ ] its sub-item',
+    '',
+    '## Complete',
+    '- [x] old ✅ 2026-03-01 ^a5',
+  ].join('\n'));
+  let out = autoSort(src, T);
+  assert.equal(out, note('today', [
+    '- [ ] next week 📅 2026-03-15 ^a3',
+    '- [ ] undated ^a4',
+    '  - [ ] its sub-item',
+    '',
+    '## Today',
+    '- [ ] write report 📅 2026-03-10 ^a1',
+    '- [ ] late thing 📅 2026-03-02 ^a2',
+    '',
+    '## Complete',
+    '- [x] old ✅ 2026-03-01 ^a5',
+  ].join('\n')));
+  assert.equal(autoSort(out, T), out, 'running it again changes nothing');
+
+  // custom names; an existing heading is reused whatever its level/case; sub-items move along
+  assert.deepEqual(dueHeadersFrom(note('overdue=Late, today = "Due today", week', '')), { overdue: 'Late', today: 'Due today', week: 'This week' });
+  src = note('today=Due today', '- [ ] a 📅 2026-03-10 ^b1\n  - [ ] sub\n\n### due TODAY\n- [ ] already here 📅 2026-03-10 ^b2\n');
+  out = fileByDue(src, dueHeadersFrom(src), T);
+  assert.equal(out, note('today=Due today', '### due TODAY\n- [ ] already here 📅 2026-03-10 ^b2\n- [ ] a 📅 2026-03-10 ^b1\n  - [ ] sub\n'));
+
+  // the next day the item no longer fits "Today" (no overdue group → still today); with an
+  // overdue group it moves there, and a heading created later in group order goes after Today
+  src = note('overdue, today, tomorrow', '- [ ] x 📅 2026-03-11 ^c1\n- [ ] y 📅 2026-03-09 ^c2\n\n## Today\n- [ ] z 📅 2026-03-10 ^c3\n');
+  out = fileByDue(src, dueHeadersFrom(src), T);
+  assert.equal(out, note('overdue, today, tomorrow', '## Overdue\n- [ ] y 📅 2026-03-09 ^c2\n\n## Today\n- [ ] z 📅 2026-03-10 ^c3\n\n## Tomorrow\n- [ ] x 📅 2026-03-11 ^c1\n'));
+
+  // a date pushed out of every enabled group moves the item back above the due-date headings
+  src = note('today', 'Intro\n\n## Today\n- [ ] moved out 📅 2026-04-01 ^d1\n- [ ] stays 📅 2026-03-10 ^d2\n');
+  out = fileByDue(src, dueHeadersFrom(src), T);
+  assert.equal(out, note('today', 'Intro\n- [ ] moved out 📅 2026-04-01 ^d1\n\n## Today\n- [ ] stays 📅 2026-03-10 ^d2\n'));
+
+  // finished items, code blocks and notes without the setting are left alone
+  src = note('today', '- [x] done 📅 2026-03-10 ✅ 2026-03-10 ^e1\n```\n- [ ] in code 📅 2026-03-10\n```\n');
+  assert.equal(fileByDue(src, dueHeadersFrom(src), T), src);
+  const plain = '# No setting\n- [ ] a 📅 2026-03-10\n';
+  assert.equal(autoSort(plain, T), plain);
+});

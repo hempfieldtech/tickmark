@@ -1,5 +1,5 @@
 import { marked } from './vendor/marked.esm.js';
-import { checkboxLines, changeItem, parseTasks, normTag, localDate, sortTasks, sortKeysFrom, SORT_KEYS } from './shared/tasks.js';
+import { checkboxLines, changeItem, parseTasks, normTag, localDate, sortTasks, sortKeysFrom, SORT_KEYS, fileByDue, dueHeadersFrom, DUE_BUCKETS } from './shared/tasks.js';
 import { parseRecurrence, describeRecurrence } from './shared/recur.js';
 import { textStats } from './shared/words.js';
 import { parseFrontmatter, writeFrontmatter } from './shared/frontmatter.js';
@@ -677,9 +677,34 @@ function keepSorted(keys) {
   applyEdit(keys.length ? sortTasks(text, keys) : text);
   toast(keys.length ? `This note's tasks stay sorted by ${keys.map((k) => SORT_KEYS[k].toLowerCase()).join(', then ')}` : 'No longer kept sorted');
 }
+// ---- due-date headings (⋯ → Sort tasks…): once, or kept via `due-headers:` in the frontmatter
+const dueSpec = (b) => Object.entries(b).map(([k, n]) => (n === DUE_BUCKETS[k] ? k : `${k}=${n}`)).join(', ');
+function fileDueOnce() {
+  if (S.mode !== 'note') return;
+  const set = dueHeadersFrom(el.editor.value);
+  const buckets = Object.keys(set).length ? set : { today: DUE_BUCKETS.today };
+  const next = fileByDue(el.editor.value, buckets, localDate(new Date()));
+  if (next === el.editor.value) return toast('Nothing to move');
+  applyEdit(next);
+  toast(`Filed tasks under ${Object.values(buckets).map((n) => `"${n}"`).join(', ')}`);
+}
+function keepDueHeaders(spec) {
+  const fm = parseFrontmatter(el.editor.value);
+  const entries = fm.entries.filter((e) => e.key?.toLowerCase() !== 'due-headers');
+  if (spec) entries.push({ key: 'due-headers', kind: 'text', value: spec });
+  const text = writeFrontmatter(fm.body, entries);
+  applyEdit(spec ? fileByDue(text, dueHeadersFrom(text), localDate(new Date())) : text);
+  toast(spec ? 'Tasks stay filed by due date: rename the heading in Properties (due-headers: today=Your name)' : 'No longer filed by due date');
+}
 function openSortPicker() {
   const kept = sortKeysFrom(el.editor.value);
+  const due = dueHeadersFrom(el.editor.value);
+  const dueOn = Object.keys(due).length > 0;
   const items = [
+    { label: dueOn ? 'File tasks by due date now' : 'File tasks due today under "Today"', detail: dueOn ? Object.values(due).join(', ') : 'once (overdue ones too)', run: fileDueOnce },
+    ...(dueOn
+      ? [{ label: 'Stop filing tasks by due date', detail: `now: ${dueSpec(due)}`, run: () => keepDueHeaders(null) }]
+      : [{ label: 'Keep tasks filed by due date', detail: 'due-headers in the frontmatter: today, tomorrow, week… =Heading name', run: () => keepDueHeaders('today') }]),
     ...Object.entries(SORT_KEYS).map(([k, name]) => ({ label: `Sort by ${name.toLowerCase()}`, detail: k === 'due' ? 'undated last' : k === 'priority' ? 'highest first' : k === 'state' ? 'in progress, to do, done, cancelled' : 'A to Z', run: () => sortNote([k]) })),
     { label: 'Sort by due date, then priority', run: () => sortNote(['due', 'priority']) },
     ...Object.entries(SORT_KEYS).filter(([k]) => kept.join() !== k).map(([k, name]) => ({ label: `Keep sorted by ${name.toLowerCase()}`, detail: 'sort-tasks in the frontmatter', run: () => keepSorted([k]) })),

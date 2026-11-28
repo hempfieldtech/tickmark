@@ -454,6 +454,9 @@ details.card[open] summary { margin-bottom: 4px; }
 #accounts { display: grid; gap: 12px; }
 .dlg fieldset.account { background: var(--bg); }
 .dlg fieldset.account input, .dlg fieldset.account select { background: var(--surface); }
+/* the editable account name sits inside the card as its title row, not in a gap in the
+   top border: an input in a border gap left a mismatched notch over the card's fill */
+.dlg fieldset.account legend { float: left; width: 100%; padding: 0; margin: 0 0 -2px -6px; }
 .dlg fieldset.account legend .acct-name { font-weight: 600; font-size: 14px; border-color: transparent; background: transparent; padding: 2px 6px; width: auto; field-sizing: content; min-width: 6em; max-width: 100%; }
 .dlg fieldset.account legend .acct-name:hover, .dlg fieldset.account legend .acct-name:focus { border-color: var(--line); background: var(--surface); }
 .me-line { margin: 0; }
@@ -911,8 +914,14 @@ button.toc-twist:hover { background: color-mix(in srgb, var(--text) 8%, transpar
 .at-task .at-in { max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Kanban boards: ![[Note|kanban]] */
-.embed.kanban-embed { display: block; }
-.embed-body.kanban { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 8px; overflow-x: auto; padding: 8px 2px 4px; }
+/* the board breaks out of the 760px reading column to use the whole preview pane (up to
+   1400px), columns keep a usable width and the board scrolls sideways instead of squeezing */
+#preview-wrap { container-type: inline-size; }
+.embed.kanban-embed { display: block; --kb-w: min(calc(100cqi - 48px), 1400px); width: var(--kb-w); max-width: none; margin-left: calc(50% - var(--kb-w) / 2); }
+.embed-body.kanban { display: flex; gap: 10px; overflow-x: auto; padding: 8px 2px 6px; align-items: stretch; }
+.embed-body.kanban > .kb-col { flex: 1 1 220px; min-width: 210px; }
+/* empty columns shrink to a strip (still a drop target) and give their room to the others */
+.embed-body.kanban > .kb-col:not(:has(.kb-card)) { flex: 0 1 140px; min-width: 120px; }
 .kb-col { background: color-mix(in srgb, var(--text) 4%, var(--bg)); border: 1px solid var(--line); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-height: 90px; transition: background .12s, border-color .12s; }
 .kb-col h6 { margin: 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); display: flex; justify-content: space-between; }
 .kb-col h6 b { font-weight: 600; }
@@ -927,7 +936,7 @@ button.toc-twist:hover { background: color-mix(in srgb, var(--text) 8%, transpar
 .kb-col[data-ch="x"] .kb-title, .kb-col[data-ch="-"] .kb-title { color: var(--muted); }
 .kb-col[data-ch="-"] .kb-title { text-decoration: line-through; }
 .kb-top { display: flex; gap: 6px; align-items: flex-start; }
-.kb-title { flex: 1; min-width: 0; overflow-wrap: anywhere; cursor: pointer; }
+.kb-title { flex: 1; min-width: 0; overflow-wrap: break-word; cursor: pointer; }
 .kb-title:hover { color: var(--accent); }
 .kb-more { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 15px; line-height: 1; border-radius: 4px; }
 .kb-more:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
@@ -939,7 +948,7 @@ button.toc-twist:hover { background: color-mix(in srgb, var(--text) 8%, transpar
 .kb-subs li { display: flex; gap: 6px; align-items: flex-start; }
 .kb-subs li.done span, .kb-subs li.cancelled span { color: var(--muted); text-decoration: line-through; }
 .kb-subs input { margin: 2px 0 0; accent-color: var(--accent); }
-@media (max-width: 760px) { .embed-body.kanban { grid-template-columns: repeat(4, minmax(150px, 78vw)); scroll-snap-type: x mandatory; } .kb-col { scroll-snap-align: start; } }
+@media (max-width: 760px) { .embed-body.kanban { scroll-snap-type: x mandatory; } .embed-body.kanban > .kb-col { flex: 0 0 78vw; min-width: 0; scroll-snap-align: start; } .embed-body.kanban > .kb-col:not(:has(.kb-card)) { flex: 0 0 45vw; } }
 .api-tokens { padding-left: 0; list-style: none; }
 .api-new input, .api-new select { height: 34px; box-sizing: border-box; }
 .att-list { padding-left: 0; list-style: none; display: grid; gap: 8px; }

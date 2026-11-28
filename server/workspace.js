@@ -10,6 +10,7 @@ import { SyncEngine } from './sync.js';
 import { movedNotes, rewriteLinks } from './links.js';
 import { History } from './history.js';
 import { Attachments } from './attachments.js';
+import { autoSort, localDate } from '../public/shared/tasks.js';
 
 /** How long after a file changes outside Tickmark to sync it (editors often write in several steps). */
 const EXTERNAL_SYNC_DELAY = Number(process.env.TICKMARK_EXTERNAL_SYNC_MS) || 3000;
@@ -74,7 +75,26 @@ export class Workspace {
     this.pingMs = pingSecs > 0 ? Math.max(15, pingSecs) * 1000 : 0;
     this.pingTimer = this.pingMs ? setInterval(() => { if (this.clients.size) this.sync.ping().catch(() => {}); }, this.pingMs) : null;
     this.pingTimer?.unref?.();
+    // Notes with `due-headers:` keep tasks under due-date headings; when the day changes an item due
+    // tomorrow becomes "Today", so re-file them at start and whenever the date rolls over.
+    this.dueDay = null;
+    this.dueTimer = setInterval(() => this.refileDue(), 5 * 60 * 1000);
+    this.dueTimer.unref?.();
+    this.refileDue();
     this.history.changed(); // record the vault as it is at start (edits made while Tickmark was off)
+  }
+
+  /** Re-run autoSort (due-date headings) on notes that ask for it, once per day. */
+  refileDue(today = localDate(new Date())) {
+    if (today === this.dueDay) return 0;
+    this.dueDay = today;
+    let changed = 0;
+    for (const f of this.vault.list().files) {
+      try {
+        if (this.vault.modify(f.path, (cur) => (/^due-headers\s*:/im.test(cur.slice(0, 4000)) ? autoSort(cur, today) : null))) changed++;
+      } catch (e) { console.warn(this.name ? `[${this.name}]` : '', `due-date filing of ${f.path} failed:`, e.message); }
+    }
+    return changed;
   }
 
   hashOf(rel) { return this.index.db.prepare('SELECT hash FROM files WHERE path=?').get(rel)?.hash; }
@@ -195,6 +215,7 @@ export class Workspace {
     clearTimeout(this.externalSyncTimer);
     clearInterval(this.serverTimer);
     clearInterval(this.pingTimer);
+    clearInterval(this.dueTimer);
     this.watcher?.close();
     for (const res of this.clients) res.end();
     this.clients.clear();

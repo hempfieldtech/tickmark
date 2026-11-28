@@ -1,6 +1,6 @@
 {
   "name": "tickmark",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Markdown notes PWA whose tagged checklists sync both ways with CalDAV",
   "type": "module",
   "private": true,
